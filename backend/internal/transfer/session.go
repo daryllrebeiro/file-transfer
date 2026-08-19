@@ -8,12 +8,21 @@ import (
 	"time"
 )
 
+type TransportMode string
+
+const (
+	TransportAuto   TransportMode = "auto"
+	TransportRelay  TransportMode = "relay"
+	TransportWebRTC TransportMode = "webrtc"
+)
+
 type Metadata struct {
 	FileName  string `json:"fileName"`
 	FileSize  int64  `json:"fileSize"`
 	MimeType  string `json:"mimeType"`
 	ChunkSize int    `json:"chunkSize"`
 	SHA256    string `json:"sha256,omitempty"`
+	Transport string `json:"transport,omitempty"`
 }
 type Peer interface {
 	SendControl([]byte) error
@@ -21,21 +30,23 @@ type Peer interface {
 	Close() error
 }
 type Session struct {
-	ID                string    `json:"id"`
-	Metadata          Metadata  `json:"metadata"`
-	CreatedAt         time.Time `json:"createdAt"`
-	ExpiresAt         time.Time `json:"expiresAt"`
-	State             State     `json:"state"`
-	SenderConnected   bool      `json:"senderConnected"`
-	ReceiverConnected bool      `json:"receiverConnected"`
-	Accepted          bool      `json:"accepted"`
-	Sender            Peer      `json:"-"`
-	Receiver          Peer      `json:"-"`
-	NextChunk         uint64    `json:"-"`
-	LastChunkIndex    uint64    `json:"-"`
-	LastChunk         []byte    `json:"-"`
-	SenderTokenHash   [32]byte  `json:"-"`
-	ReceiverTokenHash [32]byte  `json:"-"`
+	ID                string        `json:"id"`
+	Metadata          Metadata      `json:"metadata"`
+	CreatedAt         time.Time     `json:"createdAt"`
+	ExpiresAt         time.Time     `json:"expiresAt"`
+	State             State         `json:"state"`
+	SenderConnected   bool          `json:"senderConnected"`
+	ReceiverConnected bool          `json:"receiverConnected"`
+	Accepted          bool          `json:"accepted"`
+	TransportMode     TransportMode `json:"transportMode,omitempty"`
+	ActiveTransport   TransportMode `json:"activeTransport,omitempty"`
+	Sender            Peer          `json:"-"`
+	Receiver          Peer          `json:"-"`
+	NextChunk         uint64        `json:"-"`
+	LastChunkIndex    uint64        `json:"-"`
+	LastChunk         []byte        `json:"-"`
+	SenderTokenHash   [32]byte      `json:"-"`
+	ReceiverTokenHash [32]byte      `json:"-"`
 	Mu                sync.Mutex
 }
 
@@ -77,7 +88,7 @@ func (session *Session) Expire(now time.Time) bool {
 func (session *Session) Snapshot() Session {
 	session.Mu.Lock()
 	defer session.Mu.Unlock()
-	return Session{ID: session.ID, Metadata: session.Metadata, CreatedAt: session.CreatedAt, ExpiresAt: session.ExpiresAt, State: session.State, SenderConnected: session.SenderConnected, ReceiverConnected: session.ReceiverConnected, Accepted: session.Accepted}
+	return Session{ID: session.ID, Metadata: session.Metadata, CreatedAt: session.CreatedAt, ExpiresAt: session.ExpiresAt, State: session.State, SenderConnected: session.SenderConnected, ReceiverConnected: session.ReceiverConnected, Accepted: session.Accepted, TransportMode: session.TransportMode, ActiveTransport: session.ActiveTransport}
 }
 
 var errInvalidState = errors.New("invalid transfer state")

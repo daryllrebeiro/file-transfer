@@ -25,13 +25,17 @@ type Handler struct {
 	AllowedOrigins map[string]bool
 }
 type control struct {
-	Type       string            `json:"type"`
-	TransferID string            `json:"transferId,omitempty"`
-	Metadata   transfer.Metadata `json:"metadata,omitempty"`
-	ChunkIndex uint64            `json:"chunkIndex,omitempty"`
-	Message    string            `json:"message,omitempty"`
-	Token      string            `json:"token,omitempty"`
-	NextChunk  uint64            `json:"nextChunk,omitempty"`
+	Type          string            `json:"type"`
+	TransferID    string            `json:"transferId,omitempty"`
+	Metadata      transfer.Metadata `json:"metadata,omitempty"`
+	ChunkIndex    uint64            `json:"chunkIndex"`
+	Message       string            `json:"message,omitempty"`
+	Token         string            `json:"token,omitempty"`
+	NextChunk     uint64            `json:"nextChunk"`
+	SDP           string            `json:"sdp,omitempty"`
+	Candidate     interface{}       `json:"candidate,omitempty"`
+	SdpMid        string            `json:"sdpMid,omitempty"`
+	SdpMLineIndex *int              `json:"sdpMLineIndex,omitempty"`
 }
 type outbound struct {
 	kind int
@@ -260,6 +264,62 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		}
 		if receiver != nil {
 			_ = receiver.SendControl(message)
+		}
+	case "webrtc_offer":
+		if role != transfer.SenderRole {
+			return
+		}
+		_, receiver, ok := handler.Manager.Connections(id)
+		if ok && receiver != nil {
+			_ = receiver.SendControl(controlBytes(message))
+		}
+	case "webrtc_answer":
+		if role != transfer.ReceiverRole {
+			return
+		}
+		sender, _, ok := handler.Manager.Connections(id)
+		if ok && sender != nil {
+			_ = sender.SendControl(controlBytes(message))
+		}
+	case "webrtc_ice_candidate":
+		sender, receiver, ok := handler.Manager.Connections(id)
+		if !ok {
+			return
+		}
+		if role == transfer.SenderRole && receiver != nil {
+			_ = receiver.SendControl(controlBytes(message))
+		} else if role == transfer.ReceiverRole && sender != nil {
+			_ = sender.SendControl(controlBytes(message))
+		}
+	case "webrtc_connected":
+		session, ok := handler.Manager.Get(id)
+		if ok {
+			session.Mu.Lock()
+			session.ActiveTransport = transfer.TransportWebRTC
+			session.Mu.Unlock()
+		}
+		sender, receiver, ok := handler.Manager.Connections(id)
+		if ok {
+			if role == transfer.SenderRole && receiver != nil {
+				_ = receiver.SendControl(controlBytes(message))
+			} else if role == transfer.ReceiverRole && sender != nil {
+				_ = sender.SendControl(controlBytes(message))
+			}
+		}
+	case "webrtc_failed", "webrtc_fallback":
+		session, ok := handler.Manager.Get(id)
+		if ok {
+			session.Mu.Lock()
+			session.ActiveTransport = transfer.TransportRelay
+			session.Mu.Unlock()
+		}
+		sender, receiver, ok := handler.Manager.Connections(id)
+		if ok {
+			if role == transfer.SenderRole && receiver != nil {
+				_ = receiver.SendControl(controlBytes(message))
+			} else if role == transfer.ReceiverRole && sender != nil {
+				_ = sender.SendControl(controlBytes(message))
+			}
 		}
 	}
 }

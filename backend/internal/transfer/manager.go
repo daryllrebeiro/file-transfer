@@ -110,8 +110,16 @@ func (manager *Manager) create(metadata Metadata, withTokens bool) (*Session, To
 		manager.mu.Unlock()
 		return nil, TokenPair{}, errors.New("active transfer limit reached")
 	}
-	pair := TokenPair{}
-	session := &Session{ID: id, Metadata: metadata, CreatedAt: now, ExpiresAt: now.Add(manager.ttl), State: WaitingForReceiver}
+	session := &Session{
+		ID:              id,
+		Metadata:        metadata,
+		CreatedAt:       now,
+		ExpiresAt:       now.Add(manager.ttl),
+		State:           WaitingForReceiver,
+		TransportMode:   TransportMode(metadata.Transport),
+		ActiveTransport: TransportMode(metadata.Transport),
+	}
+	var pair TokenPair
 	if withTokens {
 		pair, err = newTokenPair()
 		if err != nil {

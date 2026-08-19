@@ -87,6 +87,13 @@ No networked application can honestly guarantee complete safety. This MVP reduce
 
 The receiver uses `showSaveFilePicker()` and a writable stream where supported, so large files do not need to be assembled in JavaScript memory. Browsers without that API use a Blob fallback capped at 250 MB. The sender hashes the file incrementally before creating the transfer, and the receiver hashes incoming chunks incrementally before declaring success. The server still sees the bytes during relay; this is not end-to-end encryption.
 
-## Future transport
+## Transports
 
-`TransferClient` isolates browser transport calls. A future `WebRTCTransport` can replace the WebSocket data path while Go remains a signaling and metadata service. That would keep file bytes between devices and enable actual end-to-end encryption at the transport layer. Future extension points include passwords, multiple files, folders, authentication, pairing, parallel chunks, adaptive chunk sizing, and durable resumability.
+The application features a pluggable transport layer supporting two main transfer methods, selectable by the user:
+
+1. **WebRTC Peer-to-Peer**: File bytes are streamed directly between browsers using WebRTC Data Channels. The Go server acts solely as a signaling channel to negotiate connection parameters. When active, this transport ensures **end-to-end encryption** and high-speed local data transfer.
+2. **Server Relay**: File bytes are relayed through the Go WebSocket server using a chunk-acknowledgement window protocol. This is used as a fallback if strict NAT traversal fails.
+
+By default, **Automatic** mode attempts a WebRTC direct connection and automatically falls back to Server Relay if connection fails or times out within 10 seconds.
+
+Future extension points include passwords, multiple files, folders, authentication, pairing, parallel chunks, adaptive chunk sizing, and durable resumability.
