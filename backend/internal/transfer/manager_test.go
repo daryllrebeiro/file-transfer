@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -145,5 +146,94 @@ func TestManagerAllowsExactLastChunkRetransmission(t *testing.T) {
 	altered := EncodeChunk(0, []byte("world"))
 	if _, _, duplicate, err = manager.PrepareChunk(session.ID, 0, altered); err == nil || duplicate {
 		t.Fatal("rejected altered duplicate")
+	}
+}
+
+func TestManagerEnforcesActiveTransferAndConnectionLimits(t *testing.T) {
+	manager := NewManager(time.Minute, 100, 10)
+	manager.SetLimits(1, 1)
+	if _, err := manager.Create(Metadata{FileName: "a.txt", FileSize: 10, ChunkSize: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Create(Metadata{FileName: "b.txt", FileSize: 10, ChunkSize: 5}); err == nil {
+		t.Fatal("expected active transfer limit")
+	}
+	if !manager.AcquireConnection() {
+		t.Fatal("expected first connection")
+	}
+	if manager.AcquireConnection() {
+		t.Fatal("expected connection limit")
+	}
+	manager.ReleaseConnection()
+	if !manager.AcquireConnection() {
+		t.Fatal("expected released connection")
+	}
+}
+
+func TestManagerRejectsUnsafeMetadata(t *testing.T) {
+	manager := NewManager(time.Minute, 100, 10)
+	invalid := []Metadata{{FileName: "../secret", FileSize: 10}, {FileName: "file", FileSize: 10, SHA256: "not-a-hash"}}
+	for _, metadata := range invalid {
+		if _, err := manager.Create(metadata); err == nil {
+			t.Fatal("expected metadata validation failure")
+		}
+	}
+}
+
+func TestManagerMetrics(t *testing.T) {
+	manager := NewManager(time.Minute, 100, 10)
+	if _, err := manager.Create(Metadata{FileName: "a.txt", FileSize: 10}); err != nil {
+		t.Fatal(err)
+	}
+	manager.RecordCompleted()
+	manager.RecordCancelled()
+	manager.RecordFailed()
+	manager.RecordBytesRelayed(12)
+	manager.RecordQueueSaturation()
+	metrics := manager.Metrics()
+	if metrics.CreatedTransfers != 1 || metrics.CompletedTransfers != 1 || metrics.CancelledTransfers != 1 || metrics.FailedTransfers != 1 || metrics.BytesRelayed != 12 || metrics.QueueSaturated != 1 {
+		t.Fatalf("unexpected metrics: %+v", metrics)
+	}
+}
+
+func TestManagerShutdownClosesAndRemovesSessions(t *testing.T) {
+	manager := NewManager(time.Minute, 100, 10)
+	session, err := manager.Create(Metadata{FileName: "a.txt", FileSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Shutdown()
+	if _, ok := manager.Get(session.ID); ok {
+		t.Fatal("expected shutdown to remove sessions")
+	}
+	if metrics := manager.Metrics(); metrics.ActiveTransfers != 0 || metrics.ActiveConnections != 0 {
+		t.Fatalf("expected empty manager after shutdown: %+v", metrics)
+	}
+}
+
+func TestCapabilityTokensAreRoleScopedAndNotInSnapshots(t *testing.T) {
+	manager := NewManager(time.Minute, 100, 10)
+	session, tokens, err := manager.CreateWithTokens(Metadata{FileName: "secure.txt", FileSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens.SenderToken == "" || tokens.ReceiverToken == "" || tokens.SenderToken == tokens.ReceiverToken {
+		t.Fatal("expected distinct capability tokens")
+	}
+	if err := manager.ValidateToken(session.ID, SenderRole, tokens.SenderToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ValidateToken(session.ID, ReceiverRole, tokens.ReceiverToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ValidateToken(session.ID, SenderRole, tokens.ReceiverToken); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("expected sender role rejection, got %v", err)
+	}
+	if err := manager.ValidateToken(session.ID, ReceiverRole, "invalid"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("expected invalid token rejection, got %v", err)
+	}
+	snapshot := session.Snapshot()
+	if snapshot.SenderTokenHash != [32]byte{} || snapshot.ReceiverTokenHash != [32]byte{} {
+		t.Fatal("token hashes leaked into snapshot")
 	}
 }

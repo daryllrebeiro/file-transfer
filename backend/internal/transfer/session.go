@@ -34,6 +34,8 @@ type Session struct {
 	NextChunk         uint64    `json:"-"`
 	LastChunkIndex    uint64    `json:"-"`
 	LastChunk         []byte    `json:"-"`
+	SenderTokenHash   [32]byte  `json:"-"`
+	ReceiverTokenHash [32]byte  `json:"-"`
 	Mu                sync.Mutex
 }
 

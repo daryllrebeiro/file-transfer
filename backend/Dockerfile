@@ -8,4 +8,5 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/file-transfer /file-transfer
 EXPOSE 8080
 USER nonroot:nonroot
+ENV PORT=8080
 ENTRYPOINT ["/file-transfer"]

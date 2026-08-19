@@ -1,0 +1,33 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: relay-backend
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: "1"
+    spec:
+      containerConcurrency: 200
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/relay-backend:TAG
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: PUBLIC_BASE_URL
+              value: https://PROJECT_ID.web.app
+            - name: ALLOWED_ORIGINS
+              value: https://PROJECT_ID.web.app
+            - name: TRUST_PROXY
+              value: "false"
+            - name: MAX_ACTIVE_TRANSFERS
+              value: "1000"
+            - name: MAX_CONNECTIONS
+              value: "2000"
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      timeoutSeconds: 900

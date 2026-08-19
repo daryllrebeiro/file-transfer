@@ -13,5 +13,5 @@ export async function createReceiverSink(fileName: string, mimeType: string, fil
   }
   if (fileSize > blobFallbackLimit) throw new Error('This browser cannot safely save files larger than 250 MB. Use a Chromium-based browser or another device.');
   const parts: BlobPart[] = [];
-  return { write: async data => { parts.push(data); }, close: async () => undefined, blobParts: parts };
+  return { write: async data => { parts.push(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer); }, close: async () => undefined, blobParts: parts };
 }

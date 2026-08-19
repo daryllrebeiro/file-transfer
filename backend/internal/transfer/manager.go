@@ -2,8 +2,14 @@ package transfer
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,37 +26,191 @@ var (
 	ErrRoleConnected    = errors.New("role already connected")
 	ErrInvalidRole      = errors.New("invalid role")
 	ErrInvalidState     = errors.New("invalid transfer state")
+	ErrInvalidToken     = errors.New("invalid capability token")
 )
 
+type TokenPair struct {
+	SenderToken   string
+	ReceiverToken string
+}
+
 type Manager struct {
-	sessions     map[string]*Session
-	mu           sync.RWMutex
-	ttl          time.Duration
-	maxFileSize  int64
-	maxChunkSize int
+	sessions           map[string]*Session
+	mu                 sync.RWMutex
+	ttl                time.Duration
+	maxFileSize        int64
+	maxChunkSize       int
+	maxActiveTransfers int
+	maxConnections     int
+	connections        int
+	created            atomic.Uint64
+	completed          atomic.Uint64
+	cancelled          atomic.Uint64
+	expired            atomic.Uint64
+	failed             atomic.Uint64
+	bytesRelayed       atomic.Uint64
+	queueSaturated     atomic.Uint64
+}
+
+type Metrics struct {
+	ActiveTransfers    int    `json:"activeTransfers"`
+	ActiveConnections  int    `json:"activeConnections"`
+	CreatedTransfers   uint64 `json:"createdTransfers"`
+	CompletedTransfers uint64 `json:"completedTransfers"`
+	CancelledTransfers uint64 `json:"cancelledTransfers"`
+	ExpiredTransfers   uint64 `json:"expiredTransfers"`
+	FailedTransfers    uint64 `json:"failedTransfers"`
+	BytesRelayed       uint64 `json:"bytesRelayed"`
+	QueueSaturated     uint64 `json:"queueSaturated"`
 }
 
 func NewManager(ttl time.Duration, maxFileSize int64, maxChunkSize int) *Manager {
-	return &Manager{sessions: make(map[string]*Session), ttl: ttl, maxFileSize: maxFileSize, maxChunkSize: maxChunkSize}
+	return &Manager{sessions: make(map[string]*Session), ttl: ttl, maxFileSize: maxFileSize, maxChunkSize: maxChunkSize, maxActiveTransfers: 1000, maxConnections: 2000}
+}
+
+func (manager *Manager) SetLimits(maxActiveTransfers, maxConnections int) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.maxActiveTransfers = maxActiveTransfers
+	manager.maxConnections = maxConnections
 }
 
 func (manager *Manager) Create(metadata Metadata) (*Session, error) {
+	session, _, err := manager.create(metadata, false)
+	return session, err
+}
+
+func (manager *Manager) CreateWithTokens(metadata Metadata) (*Session, TokenPair, error) {
+	return manager.create(metadata, true)
+}
+
+func (manager *Manager) create(metadata Metadata, withTokens bool) (*Session, TokenPair, error) {
+	if strings.TrimSpace(metadata.FileName) == "" || len(metadata.FileName) > 255 || strings.ContainsAny(metadata.FileName, "\\/\x00\r\n") {
+		return nil, TokenPair{}, errors.New("invalid file name")
+	}
+	if len(metadata.MimeType) > 128 || strings.ContainsAny(metadata.MimeType, "\r\n") {
+		return nil, TokenPair{}, errors.New("invalid MIME type")
+	}
+	if metadata.SHA256 != "" && (len(metadata.SHA256) != 64 || strings.Trim(metadata.SHA256, "0123456789abcdefABCDEF") != "") {
+		return nil, TokenPair{}, errors.New("invalid SHA-256")
+	}
 	if metadata.FileSize <= 0 || metadata.FileSize > manager.maxFileSize {
-		return nil, errors.New("file size exceeds limit")
+		return nil, TokenPair{}, errors.New("file size exceeds limit")
 	}
 	if metadata.ChunkSize <= 0 || metadata.ChunkSize > manager.maxChunkSize {
 		metadata.ChunkSize = manager.maxChunkSize
 	}
 	id, err := newID()
 	if err != nil {
-		return nil, err
+		return nil, TokenPair{}, err
 	}
 	now := time.Now()
-	session := &Session{ID: id, Metadata: metadata, CreatedAt: now, ExpiresAt: now.Add(manager.ttl), State: WaitingForReceiver}
 	manager.mu.Lock()
+	if manager.maxActiveTransfers > 0 && len(manager.sessions) >= manager.maxActiveTransfers {
+		manager.mu.Unlock()
+		return nil, TokenPair{}, errors.New("active transfer limit reached")
+	}
+	pair := TokenPair{}
+	session := &Session{ID: id, Metadata: metadata, CreatedAt: now, ExpiresAt: now.Add(manager.ttl), State: WaitingForReceiver}
+	if withTokens {
+		pair, err = newTokenPair()
+		if err != nil {
+			manager.mu.Unlock()
+			return nil, TokenPair{}, err
+		}
+		session.SenderTokenHash = hashToken(pair.SenderToken)
+		session.ReceiverTokenHash = hashToken(pair.ReceiverToken)
+	}
 	manager.sessions[id] = session
 	manager.mu.Unlock()
-	return session, nil
+	manager.created.Add(1)
+	return session, pair, nil
+}
+
+func newTokenPair() (TokenPair, error) {
+	sender, err := newToken()
+	if err != nil {
+		return TokenPair{}, err
+	}
+	receiver, err := newToken()
+	if err != nil {
+		return TokenPair{}, err
+	}
+	return TokenPair{SenderToken: sender, ReceiverToken: receiver}, nil
+}
+func newToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+func hashToken(token string) [32]byte { return sha256.Sum256([]byte(token)) }
+func (manager *Manager) ValidateToken(id string, role Role, token string) error {
+	session, ok := manager.Get(id)
+	if !ok {
+		return ErrTransferNotFound
+	}
+	presented := hashToken(token)
+	session.Mu.Lock()
+	defer session.Mu.Unlock()
+	var expected [32]byte
+	switch role {
+	case SenderRole:
+		expected = session.SenderTokenHash
+	case ReceiverRole:
+		expected = session.ReceiverTokenHash
+	default:
+		return ErrInvalidRole
+	}
+	if expected == [32]byte{} || subtle.ConstantTimeCompare(expected[:], presented[:]) != 1 {
+		return ErrInvalidToken
+	}
+	return nil
+}
+
+func (manager *Manager) NextChunk(id string) (uint64, error) {
+	session, err := manager.getActive(id)
+	if err != nil {
+		return 0, err
+	}
+	session.Mu.Lock()
+	defer session.Mu.Unlock()
+	return session.NextChunk, nil
+}
+
+func (manager *Manager) AcquireConnection() bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.maxConnections > 0 && manager.connections >= manager.maxConnections {
+		return false
+	}
+	manager.connections++
+	return true
+}
+func (manager *Manager) ReleaseConnection() {
+	manager.mu.Lock()
+	if manager.connections > 0 {
+		manager.connections--
+	}
+	manager.mu.Unlock()
+}
+
+func (manager *Manager) RecordCompleted() { manager.completed.Add(1) }
+func (manager *Manager) RecordCancelled() { manager.cancelled.Add(1) }
+func (manager *Manager) RecordFailed()    { manager.failed.Add(1) }
+func (manager *Manager) RecordBytesRelayed(count int) {
+	if count > 0 {
+		manager.bytesRelayed.Add(uint64(count))
+	}
+}
+func (manager *Manager) RecordQueueSaturation() { manager.queueSaturated.Add(1) }
+func (manager *Manager) RecordExpired()         { manager.expired.Add(1) }
+func (manager *Manager) Metrics() Metrics {
+	manager.mu.RLock()
+	activeTransfers, activeConnections := len(manager.sessions), manager.connections
+	manager.mu.RUnlock()
+	return Metrics{ActiveTransfers: activeTransfers, ActiveConnections: activeConnections, CreatedTransfers: manager.created.Load(), CompletedTransfers: manager.completed.Load(), CancelledTransfers: manager.cancelled.Load(), ExpiredTransfers: manager.expired.Load(), FailedTransfers: manager.failed.Load(), BytesRelayed: manager.bytesRelayed.Load(), QueueSaturated: manager.queueSaturated.Load()}
 }
 
 func (manager *Manager) Get(id string) (*Session, bool) {
@@ -262,6 +422,20 @@ func (manager *Manager) Delete(id string) {
 	}
 }
 
+func (manager *Manager) Shutdown() {
+	manager.mu.Lock()
+	sessions := make([]*Session, 0, len(manager.sessions))
+	for id, session := range manager.sessions {
+		delete(manager.sessions, id)
+		sessions = append(sessions, session)
+	}
+	manager.connections = 0
+	manager.mu.Unlock()
+	for _, session := range sessions {
+		session.closeConnections()
+	}
+}
+
 func (manager *Manager) Cleanup(now time.Time) int {
 	manager.mu.RLock()
 	sessions := make([]*Session, 0, len(manager.sessions))
@@ -276,6 +450,7 @@ func (manager *Manager) Cleanup(now time.Time) int {
 			continue
 		}
 		manager.Delete(session.ID)
+		manager.RecordExpired()
 		removed++
 	}
 	return removed

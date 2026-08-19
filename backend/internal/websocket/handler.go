@@ -30,6 +30,8 @@ type control struct {
 	Metadata   transfer.Metadata `json:"metadata,omitempty"`
 	ChunkIndex uint64            `json:"chunkIndex,omitempty"`
 	Message    string            `json:"message,omitempty"`
+	Token      string            `json:"token,omitempty"`
+	NextChunk  uint64            `json:"nextChunk,omitempty"`
 }
 type outbound struct {
 	kind int
@@ -107,10 +109,16 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		http.Error(response, "origin not allowed", http.StatusForbidden)
 		return
 	}
-	connection, err := upgrader.Upgrade(response, request, nil)
-	if err != nil {
+	if !handler.Manager.AcquireConnection() {
+		http.Error(response, "connection limit reached", http.StatusServiceUnavailable)
 		return
 	}
+	connection, err := upgrader.Upgrade(response, request, nil)
+	if err != nil {
+		handler.Manager.ReleaseConnection()
+		return
+	}
+	defer handler.Manager.ReleaseConnection()
 	connection.SetReadLimit(maxMessageSize)
 	peer := newPeer(connection)
 	peer.Start()
@@ -140,9 +148,15 @@ func (handler *Handler) join(peer *peer, id string) (transfer.Role, error) {
 	switch message.Type {
 	case "sender_join":
 		role = transfer.SenderRole
+		if err = handler.Manager.ValidateToken(id, role, message.Token); err != nil {
+			return "", err
+		}
 		session, err = handler.Manager.AttachSender(id, peer)
 	case "receiver_join":
 		role = transfer.ReceiverRole
+		if err = handler.Manager.ValidateToken(id, role, message.Token); err != nil {
+			return "", err
+		}
 		session, err = handler.Manager.AttachReceiver(id, peer)
 	default:
 		return "", errors.New("invalid join message")
@@ -150,7 +164,11 @@ func (handler *Handler) join(peer *peer, id string) (transfer.Role, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := peer.SendControl(controlBytes(control{Type: "transfer_offer", Metadata: session.Snapshot().Metadata})); err != nil {
+	nextChunk, err := handler.Manager.NextChunk(id)
+	if err != nil {
+		return "", err
+	}
+	if err := peer.SendControl(controlBytes(control{Type: "transfer_offer", Metadata: session.Snapshot().Metadata, NextChunk: nextChunk})); err != nil {
 		return "", err
 	}
 	if role == transfer.ReceiverRole {
@@ -169,6 +187,7 @@ func (handler *Handler) loop(connection *ws.Conn, id string, role transfer.Role)
 		}
 		if messageType == ws.BinaryMessage && role == transfer.SenderRole {
 			if !handler.forward(id, data) {
+				handler.Manager.RecordFailed()
 				return
 			}
 			continue
@@ -182,7 +201,7 @@ func (handler *Handler) loop(connection *ws.Conn, id string, role transfer.Role)
 	}
 }
 func (handler *Handler) forward(id string, frame []byte) bool {
-	index, _, ok := transfer.DecodeChunk(frame)
+	index, payload, ok := transfer.DecodeChunk(frame)
 	if !ok {
 		return false
 	}
@@ -191,8 +210,10 @@ func (handler *Handler) forward(id string, frame []byte) bool {
 		return false
 	}
 	if err := receiver.SendBinary(frame); err != nil {
+		handler.Manager.RecordQueueSaturation()
 		return false
 	}
+	handler.Manager.RecordBytesRelayed(len(payload))
 	if !duplicate {
 		handler.Manager.RecordChunk(id, index, frame)
 	}
@@ -219,6 +240,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if _, err := handler.Manager.Complete(id); err != nil {
 			return
 		}
+		handler.Manager.RecordCompleted()
 		_, receiver, ok := handler.Manager.Connections(id)
 		if ok && receiver != nil {
 			_ = receiver.SendControl(controlBytes(control{Type: "transfer_complete"}))
@@ -227,6 +249,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if _, err := handler.Manager.Cancel(id); err != nil {
 			return
 		}
+		handler.Manager.RecordCancelled()
 		sender, receiver, ok := handler.Manager.Connections(id)
 		if !ok {
 			return
