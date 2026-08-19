@@ -1,0 +1,2 @@
+export type Metadata = { fileName: string; fileSize: number; mimeType: string; chunkSize: number; sha256?: string };
+export type Message = { type: string; transferId?: string; metadata?: Metadata; chunkIndex?: number; message?: string };
