@@ -155,13 +155,13 @@ func newToken() (string, error) {
 }
 func hashToken(token string) [32]byte { return sha256.Sum256([]byte(token)) }
 func (manager *Manager) ValidateToken(id string, role Role, token string) error {
-	session, ok := manager.Get(id)
+	manager.mu.RLock()
+	session, ok := manager.sessions[id]
 	if !ok {
+		manager.mu.RUnlock()
 		return ErrTransferNotFound
 	}
 	presented := hashToken(token)
-	session.Mu.Lock()
-	defer session.Mu.Unlock()
 	var expected [32]byte
 	switch role {
 	case SenderRole:
@@ -169,9 +169,12 @@ func (manager *Manager) ValidateToken(id string, role Role, token string) error 
 	case ReceiverRole:
 		expected = session.ReceiverTokenHash
 	default:
+		manager.mu.RUnlock()
 		return ErrInvalidRole
 	}
-	if expected == [32]byte{} || subtle.ConstantTimeCompare(expected[:], presented[:]) != 1 {
+	valid := expected != [32]byte{} && subtle.ConstantTimeCompare(expected[:], presented[:]) == 1
+	manager.mu.RUnlock()
+	if !valid {
 		return ErrInvalidToken
 	}
 	return nil
@@ -250,21 +253,9 @@ func (manager *Manager) AttachSender(id string, connection Peer) (*Session, erro
 	}
 	session.Mu.Lock()
 	defer session.Mu.Unlock()
-	if session.SenderConnected {
-		return nil, ErrRoleConnected
-	}
 	session.Sender = connection
-	session.SenderConnected = true
-	if session.ReceiverConnected {
-		next := WaitingForAccept
-		if session.Accepted && session.State == Paused {
-			next = Transferring
-		}
-		if session.State == WaitingForReceiver || session.State == Paused {
-			if err := transition(&session.State, next); err != nil {
-				return nil, err
-			}
-		}
+	if err := session.OnRoleAttached(SenderRole); err != nil {
+		return nil, err
 	}
 	return session, nil
 }
@@ -276,21 +267,9 @@ func (manager *Manager) AttachReceiver(id string, connection Peer) (*Session, er
 	}
 	session.Mu.Lock()
 	defer session.Mu.Unlock()
-	if session.ReceiverConnected {
-		return nil, ErrRoleConnected
-	}
 	session.Receiver = connection
-	session.ReceiverConnected = true
-	if session.SenderConnected {
-		next := WaitingForAccept
-		if session.Accepted && session.State == Paused {
-			next = Transferring
-		}
-		if session.State == WaitingForReceiver || session.State == Paused {
-			if err := transition(&session.State, next); err != nil {
-				return nil, err
-			}
-		}
+	if err := session.OnRoleAttached(ReceiverRole); err != nil {
+		return nil, err
 	}
 	return session, nil
 }

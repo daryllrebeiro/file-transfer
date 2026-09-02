@@ -54,6 +54,15 @@ export class AutoTransport implements TransferTransport {
           console.log('[AutoTransport] WebRTC connection timeout. Falling back to relay.');
           this.triggerFallback();
         }, timeout);
+      } else if (msg.type === 'transfer_offer' && this.role === 'receiver') {
+        const timeout = Number(import.meta.env.VITE_WEBRTC_CONNECTION_TIMEOUT || 10000);
+        window.clearTimeout(this.fallbackTimer);
+        this.fallbackTimer = window.setTimeout(() => {
+          console.log('[AutoTransport] WebRTC connection timeout (receiver). Falling back to relay.');
+          this.triggerFallback();
+        }, timeout);
+      } else if (msg.type === 'webrtc_connected') {
+        window.clearTimeout(this.fallbackTimer);
       }
     });
 

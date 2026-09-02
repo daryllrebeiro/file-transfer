@@ -33,8 +33,8 @@ func main() {
 	for _, origin := range settings.AllowedOrigins {
 		allowed[origin] = true
 	}
-	mux.Handle("/ws/", httpapi.SecurityHeaders(&transferws.Handler{Manager: manager, AllowedOrigins: allowed}))
-	server := &http.Server{Addr: "0.0.0.0:" + settings.Port, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 32 << 10}
+	mux.Handle("/ws/", httpapi.SecurityHeaders(transferws.NewHandler(manager, allowed)))
+	server := &http.Server{Addr: "0.0.0.0:" + settings.Port, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: settings.WriteTimeout, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 32 << 10}
 	log.Printf("file transfer server listening on %s", server.Addr)
 	stop, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignal()

@@ -91,4 +91,33 @@ func (session *Session) Snapshot() Session {
 	return Session{ID: session.ID, Metadata: session.Metadata, CreatedAt: session.CreatedAt, ExpiresAt: session.ExpiresAt, State: session.State, SenderConnected: session.SenderConnected, ReceiverConnected: session.ReceiverConnected, Accepted: session.Accepted, TransportMode: session.TransportMode, ActiveTransport: session.ActiveTransport}
 }
 
+func (session *Session) OnRoleAttached(role Role) error {
+	switch role {
+	case SenderRole:
+		if session.SenderConnected {
+			return ErrRoleConnected
+		}
+		session.SenderConnected = true
+	case ReceiverRole:
+		if session.ReceiverConnected {
+			return ErrRoleConnected
+		}
+		session.ReceiverConnected = true
+	default:
+		return ErrInvalidRole
+	}
+	if session.SenderConnected && session.ReceiverConnected {
+		next := WaitingForAccept
+		if session.Accepted && session.State == Paused {
+			next = Transferring
+		}
+		if session.State == WaitingForReceiver || session.State == Paused {
+			if err := transition(&session.State, next); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 var errInvalidState = errors.New("invalid transfer state")

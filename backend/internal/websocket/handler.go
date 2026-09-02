@@ -23,6 +23,24 @@ const (
 type Handler struct {
 	Manager        *transfer.Manager
 	AllowedOrigins map[string]bool
+	upgrader       ws.Upgrader
+}
+
+func NewHandler(manager *transfer.Manager, allowedOrigins map[string]bool) *Handler {
+	return &Handler{
+		Manager:        manager,
+		AllowedOrigins: allowedOrigins,
+		upgrader: ws.Upgrader{
+			ReadBufferSize:  32 << 10,
+			WriteBufferSize: 32 << 10,
+			CheckOrigin: func(r *http.Request) bool {
+				if origin := r.Header.Get("Origin"); origin != "" {
+					return allowedOrigins[origin]
+				}
+				return true
+			},
+		},
+	}
 }
 type control struct {
 	Type          string            `json:"type"`
@@ -48,7 +66,6 @@ type peer struct {
 	closeOnce  sync.Once
 }
 
-var upgrader = ws.Upgrader{ReadBufferSize: 32 << 10, WriteBufferSize: 32 << 10, CheckOrigin: func(*http.Request) bool { return true }}
 var errPeerQueueFull = errors.New("peer outbound queue is full")
 
 func newPeer(connection *ws.Conn) *peer {
@@ -61,7 +78,7 @@ func (peer *peer) enqueue(kind int, data []byte) error {
 	message := outbound{kind: kind, data: append([]byte(nil), data...)}
 	select {
 	case <-peer.done:
-		return netClosedError{}
+		return peerClosedError{}
 	case peer.outbound <- message:
 		return nil
 	default:
@@ -69,7 +86,18 @@ func (peer *peer) enqueue(kind int, data []byte) error {
 	}
 }
 func (peer *peer) Close() error {
-	peer.closeOnce.Do(func() { close(peer.done); _ = peer.connection.Close() })
+	peer.closeOnce.Do(func() {
+		close(peer.done)
+		for {
+			select {
+			case msg := <-peer.outbound:
+				_ = peer.connection.WriteMessage(msg.kind, msg.data)
+			default:
+				_ = peer.connection.Close()
+				return
+			}
+		}
+	})
 	return nil
 }
 func (peer *peer) writePump() {
@@ -98,9 +126,9 @@ func (peer *peer) writePump() {
 	}
 }
 
-type netClosedError struct{}
+type peerClosedError struct{}
 
-func (netClosedError) Error() string { return "peer connection is closed" }
+func (peerClosedError) Error() string { return "peer connection is closed" }
 
 func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	id := strings.TrimPrefix(request.URL.Path, "/ws/")
@@ -109,15 +137,11 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		http.Error(response, "transfer not found", http.StatusNotFound)
 		return
 	}
-	if origin := request.Header.Get("Origin"); origin != "" && !handler.AllowedOrigins[origin] {
-		http.Error(response, "origin not allowed", http.StatusForbidden)
-		return
-	}
 	if !handler.Manager.AcquireConnection() {
 		http.Error(response, "connection limit reached", http.StatusServiceUnavailable)
 		return
 	}
-	connection, err := upgrader.Upgrade(response, request, nil)
+	connection, err := handler.upgrader.Upgrade(response, request, nil)
 	if err != nil {
 		handler.Manager.ReleaseConnection()
 		return

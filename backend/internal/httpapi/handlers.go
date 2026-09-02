@@ -74,6 +74,10 @@ func (server *Server) create(w http.ResponseWriter, request *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if request.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+		http.Error(w, "invalid request origin", http.StatusForbidden)
+		return
+	}
 	if !server.CreateLimiter.Allow(server.clientIP(request), time.Now()) {
 		http.Error(w, "creation rate limit exceeded", http.StatusTooManyRequests)
 		return
@@ -89,7 +93,7 @@ func (server *Server) create(w http.ResponseWriter, request *http.Request) {
 		http.Error(w, "invalid transfer metadata", http.StatusBadRequest)
 		return
 	}
-	receiverURL := strings.TrimRight(server.BaseURL, "/") + "/receive/" + session.ID + "?token=" + tokens.ReceiverToken
+	receiverURL := strings.TrimRight(server.BaseURL, "/") + "/receive/" + session.ID + "#token=" + tokens.ReceiverToken
 	writeJSON(w, http.StatusCreated, map[string]interface{}{"id": session.ID, "expiresAt": session.ExpiresAt, "url": receiverURL, "senderToken": tokens.SenderToken})
 }
 func (server *Server) clientIP(request *http.Request) string {

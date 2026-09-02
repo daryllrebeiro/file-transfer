@@ -248,7 +248,7 @@ function Sender() {
   const { transferId } = useParams();
   const location = useLocation();
   const routeDetails = location.state as { file?: File; url: string; senderToken: string; sha256: string; transport?: TransportMode; fileName?: string; fileSize?: number } | undefined;
-  const saved = transferId ? JSON.parse(sessionStorage.getItem(`sender:${transferId}`) || 'null') as { url:string; senderToken:string; sha256:string; transport?: TransportMode; fileName?:string; fileSize?:number } | null : null;
+  const saved = transferId ? (() => { try { return JSON.parse(sessionStorage.getItem(`sender:${transferId}`) || 'null') as { url:string; senderToken:string; sha256:string; transport?: TransportMode; fileName?:string; fileSize?:number } | null; } catch { return null; } })() : null;
   const details = routeDetails || saved;
   const [selectedFile, setSelectedFile] = useState<File | undefined>(routeDetails?.file);
   const file = routeDetails?.file || selectedFile;
@@ -400,7 +400,7 @@ function Sender() {
             {renderBadge()}
           </div>
         </div>
-        {!waiting && <Progress value={progress} file={file} />}
+        {!waiting && <Progress value={progress} file={{ name: file.name, fileSize: file.size }} />}
         
         <DiagnosticsPanel 
           mode={details?.transport || 'auto'}
@@ -417,7 +417,7 @@ function Sender() {
 
 function Receiver() {
   const { transferId } = useParams();
-  const receiverToken = new URLSearchParams(window.location.search).get('token') || '';
+  const receiverToken = (() => { const hash = window.location.hash.slice(1); return new URLSearchParams(hash).get('token') || ''; })();
   const [metadata, setMetadata] = useState<Metadata>();
   const metadataRef = useRef<Metadata | undefined>(undefined);
   const [state, setState] = useState(receiverToken ? 'Connecting…' : 'This receiver link is missing its access token.');
@@ -625,6 +625,6 @@ function Receiver() {
   );
 }
 
-function Progress({ value, file }: { value:number; file:{ name:string; fileSize?:number; size?:number } }) { const total = file.fileSize ?? file.size ?? 0; return <div className="progress-wrap"><div className="progress-label"><strong>{Math.round(value * 100)}%</strong><span>{bytes(Math.min(value * total, total))} / {bytes(total)}</span></div><div className="bar"><span style={{ width:`${value * 100}%` }} /></div><p className="muted">{value >= 1 ? `✓ ${file.name} verified by SHA-256` : file.name}</p></div>; }
+function Progress({ value, file }: { value:number; file:{ name:string; fileSize:number } }) { const total = file.fileSize; return <div className="progress-wrap"><div className="progress-label"><strong>{Math.round(value * 100)}%</strong><span>{bytes(Math.min(value * total, total))} / {bytes(total)}</span></div><div className="bar"><span style={{ width:`${value * 100}%` }} /></div><p className="muted">{value >= 1 ? `✓ ${file.name} verified by SHA-256` : file.name}</p></div>; }
 function Empty({ title, text }: { title:string; text:string }) { return <section className="hero compact"><div className="card message"><h2>{title}</h2><p>{text}</p><Link to="/" className="button">Start over</Link></div></section>; }
 export default function App() { return <Routes><Route path="/" element={<Home />} /><Route path="/transfer/:transferId" element={<Sender />} /><Route path="/receive/:transferId" element={<Receiver />} /><Route path="*" element={<Empty title="Page not found" text="This transfer path does not exist." />} /></Routes>; }
