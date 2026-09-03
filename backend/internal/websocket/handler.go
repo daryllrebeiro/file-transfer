@@ -42,6 +42,7 @@ func NewHandler(manager *transfer.Manager, allowedOrigins map[string]bool) *Hand
 		},
 	}
 }
+
 type control struct {
 	Type          string            `json:"type"`
 	TransferID    string            `json:"transferId,omitempty"`
@@ -86,24 +87,13 @@ func (peer *peer) enqueue(kind int, data []byte) error {
 	}
 }
 func (peer *peer) Close() error {
-	peer.closeOnce.Do(func() {
-		close(peer.done)
-		for {
-			select {
-			case msg := <-peer.outbound:
-				_ = peer.connection.WriteMessage(msg.kind, msg.data)
-			default:
-				_ = peer.connection.Close()
-				return
-			}
-		}
-	})
+	peer.closeOnce.Do(func() { close(peer.done) })
 	return nil
 }
 func (peer *peer) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer ticker.Stop()
-	defer peer.Close()
+	defer peer.connection.Close()
 	for {
 		select {
 		case message := <-peer.outbound:
@@ -121,7 +111,19 @@ func (peer *peer) writePump() {
 				return
 			}
 		case <-peer.done:
-			return
+			for {
+				select {
+				case message := <-peer.outbound:
+					if err := peer.connection.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+						return
+					}
+					if err := peer.connection.WriteMessage(message.kind, message.data); err != nil {
+						return
+					}
+				default:
+					return
+				}
+			}
 		}
 	}
 }
@@ -288,6 +290,12 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		}
 		if receiver != nil {
 			_ = receiver.SendControl(message)
+		}
+		if sender != nil {
+			_ = sender.Close()
+		}
+		if receiver != nil {
+			_ = receiver.Close()
 		}
 	case "webrtc_offer":
 		if role != transfer.SenderRole {

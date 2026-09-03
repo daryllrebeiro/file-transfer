@@ -1,16 +1,32 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Link, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
-import { createTransfer, socketURL } from './services/api';
+import { createTransfer, getTransferLimits, socketURL, type TransferLimits } from './services/api';
 import { createHash, digestHex, hashFile } from './services/integrity';
 import { createReceiverSink, type ReceiverSink } from './services/receiverStorage';
 import type { Metadata } from './types';
 import { createTransferTransport, type TransportMode, type TransportStatus } from './transport/TransportFactory';
 import { type TransferTransport } from './transport/TransferTransport';
+import { logger } from './services/logger';
 
 const chunkSize = 2 * 1024 * 1024;
 const bytes = (value: number) => value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(2)} MB` : `${(value / 1024 ** 3).toFixed(2)} GB`;
 function Shell({ children }: { children: ReactNode }) { return <main><header><Link to="/" className="brand"><span>◈</span> relay</Link><span className="privacy">Temporary by design</span></header>{children}<footer>Files stream through memory only. Nothing is permanently stored.</footer></main>; }
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() { return { hasError: true }; }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    logger.error('Unhandled UI error', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) return <Shell><section className="hero compact"><div className="card message"><h2>Something went wrong</h2><p>Reload this page or start a new transfer.</p><Link to="/" className="button">Start over</Link></div></section></Shell>;
+    return this.props.children;
+  }
+}
 
 function Home() {
   const navigate = useNavigate();
@@ -18,6 +34,7 @@ function Home() {
   const [file, setFile] = useState<File>();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [limits, setLimits] = useState<TransferLimits>();
 
   const supportsWebRTC = typeof RTCPeerConnection !== 'undefined';
   const getInitialTransport = (): TransportMode => {
@@ -30,6 +47,12 @@ function Home() {
 
   const choose = (selected?: File) => { if (selected) setFile(selected); };
 
+  useEffect(() => {
+    const controller = new AbortController();
+    void getTransferLimits(controller.signal).then(setLimits).catch(() => undefined);
+    return () => controller.abort();
+  }, []);
+
   const handleSelectTransport = (mode: TransportMode) => {
     if (!supportsWebRTC && mode !== 'relay') return;
     setTransportMode(mode);
@@ -38,6 +61,10 @@ function Home() {
 
   async function create() {
     if (!file) return;
+    if (limits && file.size > limits.maxFileSize) {
+      setError(`This file is larger than the configured ${bytes(limits.maxFileSize)} limit.`);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -627,4 +654,4 @@ function Receiver() {
 
 function Progress({ value, file }: { value:number; file:{ name:string; fileSize:number } }) { const total = file.fileSize; return <div className="progress-wrap"><div className="progress-label"><strong>{Math.round(value * 100)}%</strong><span>{bytes(Math.min(value * total, total))} / {bytes(total)}</span></div><div className="bar"><span style={{ width:`${value * 100}%` }} /></div><p className="muted">{value >= 1 ? `✓ ${file.name} verified by SHA-256` : file.name}</p></div>; }
 function Empty({ title, text }: { title:string; text:string }) { return <section className="hero compact"><div className="card message"><h2>{title}</h2><p>{text}</p><Link to="/" className="button">Start over</Link></div></section>; }
-export default function App() { return <Routes><Route path="/" element={<Home />} /><Route path="/transfer/:transferId" element={<Sender />} /><Route path="/receive/:transferId" element={<Receiver />} /><Route path="*" element={<Empty title="Page not found" text="This transfer path does not exist." />} /></Routes>; }
+export default function App() { return <ErrorBoundary><Routes><Route path="/" element={<Home />} /><Route path="/transfer/:transferId" element={<Sender />} /><Route path="/receive/:transferId" element={<Receiver />} /><Route path="*" element={<Empty title="Page not found" text="This transfer path does not exist." />} /></Routes></ErrorBoundary>; }

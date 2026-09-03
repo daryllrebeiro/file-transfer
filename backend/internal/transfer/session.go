@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"sync"
@@ -44,7 +45,7 @@ type Session struct {
 	Receiver          Peer          `json:"-"`
 	NextChunk         uint64        `json:"-"`
 	LastChunkIndex    uint64        `json:"-"`
-	LastChunk         []byte        `json:"-"`
+	LastChunkHash     [32]byte      `json:"-"`
 	SenderTokenHash   [32]byte      `json:"-"`
 	ReceiverTokenHash [32]byte      `json:"-"`
 	Mu                sync.Mutex
@@ -58,7 +59,11 @@ func newID() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 func (session *Session) expired(now time.Time) bool { return now.After(session.ExpiresAt) }
-func (session *Session) HasLastChunk() bool         { return len(session.LastChunk) > 0 }
+func (session *Session) HasLastChunk() bool         { return session.LastChunkHash != [32]byte{} }
+func (session *Session) SetLastChunk(frame []byte)  { session.LastChunkHash = sha256.Sum256(frame) }
+func (session *Session) MatchesLastChunk(frame []byte) bool {
+	return session.HasLastChunk() && session.LastChunkHash == sha256.Sum256(frame)
+}
 func (session *Session) closeConnections() {
 	if session.Sender != nil {
 		_ = session.Sender.Close()
@@ -81,7 +86,7 @@ func (session *Session) Expire(now time.Time) bool {
 	if err := transition(&session.State, Expired); err != nil {
 		return false
 	}
-	session.LastChunk = nil
+	session.LastChunkHash = [32]byte{}
 	session.closeConnections()
 	return true
 }

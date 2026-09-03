@@ -1,7 +1,6 @@
 package transfer
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -27,6 +26,12 @@ var (
 	ErrInvalidRole      = errors.New("invalid role")
 	ErrInvalidState     = errors.New("invalid transfer state")
 	ErrInvalidToken     = errors.New("invalid capability token")
+	ErrInvalidFileName  = errors.New("invalid file name")
+	ErrInvalidMIME      = errors.New("invalid MIME type")
+	ErrInvalidSHA256    = errors.New("invalid SHA-256")
+	ErrInvalidFileSize  = errors.New("file size exceeds limit")
+	ErrInvalidChunkSize = errors.New("invalid chunk size")
+	ErrTransferLimit    = errors.New("active transfer limit reached")
 )
 
 type TokenPair struct {
@@ -64,6 +69,11 @@ type Metrics struct {
 	QueueSaturated     uint64 `json:"queueSaturated"`
 }
 
+type Limits struct {
+	MaxFileSize  int64 `json:"maxFileSize"`
+	MaxChunkSize int   `json:"maxChunkSize"`
+}
+
 func NewManager(ttl time.Duration, maxFileSize int64, maxChunkSize int) *Manager {
 	return &Manager{sessions: make(map[string]*Session), ttl: ttl, maxFileSize: maxFileSize, maxChunkSize: maxChunkSize, maxActiveTransfers: 1000, maxConnections: 2000}
 }
@@ -73,6 +83,12 @@ func (manager *Manager) SetLimits(maxActiveTransfers, maxConnections int) {
 	defer manager.mu.Unlock()
 	manager.maxActiveTransfers = maxActiveTransfers
 	manager.maxConnections = maxConnections
+}
+
+func (manager *Manager) Limits() Limits {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return Limits{MaxFileSize: manager.maxFileSize, MaxChunkSize: manager.maxChunkSize}
 }
 
 func (manager *Manager) Create(metadata Metadata) (*Session, error) {
@@ -86,16 +102,16 @@ func (manager *Manager) CreateWithTokens(metadata Metadata) (*Session, TokenPair
 
 func (manager *Manager) create(metadata Metadata, withTokens bool) (*Session, TokenPair, error) {
 	if strings.TrimSpace(metadata.FileName) == "" || len(metadata.FileName) > 255 || strings.ContainsAny(metadata.FileName, "\\/\x00\r\n") {
-		return nil, TokenPair{}, errors.New("invalid file name")
+		return nil, TokenPair{}, ErrInvalidFileName
 	}
 	if len(metadata.MimeType) > 128 || strings.ContainsAny(metadata.MimeType, "\r\n") {
-		return nil, TokenPair{}, errors.New("invalid MIME type")
+		return nil, TokenPair{}, ErrInvalidMIME
 	}
 	if metadata.SHA256 != "" && (len(metadata.SHA256) != 64 || strings.Trim(metadata.SHA256, "0123456789abcdefABCDEF") != "") {
-		return nil, TokenPair{}, errors.New("invalid SHA-256")
+		return nil, TokenPair{}, ErrInvalidSHA256
 	}
 	if metadata.FileSize <= 0 || metadata.FileSize > manager.maxFileSize {
-		return nil, TokenPair{}, errors.New("file size exceeds limit")
+		return nil, TokenPair{}, ErrInvalidFileSize
 	}
 	if metadata.ChunkSize <= 0 || metadata.ChunkSize > manager.maxChunkSize {
 		metadata.ChunkSize = manager.maxChunkSize
@@ -108,7 +124,7 @@ func (manager *Manager) create(metadata Metadata, withTokens bool) (*Session, To
 	manager.mu.Lock()
 	if manager.maxActiveTransfers > 0 && len(manager.sessions) >= manager.maxActiveTransfers {
 		manager.mu.Unlock()
-		return nil, TokenPair{}, errors.New("active transfer limit reached")
+		return nil, TokenPair{}, ErrTransferLimit
 	}
 	session := &Session{
 		ID:              id,
@@ -307,7 +323,7 @@ func (manager *Manager) Complete(id string) (*Session, error) {
 	if err := transition(&session.State, Completed); err != nil {
 		return nil, err
 	}
-	session.LastChunk = nil
+	session.LastChunkHash = [32]byte{}
 	return session, nil
 }
 
@@ -324,8 +340,7 @@ func (manager *Manager) Cancel(id string) (*Session, error) {
 	if err := transition(&session.State, Cancelled); err != nil {
 		return nil, err
 	}
-	session.LastChunk = nil
-	session.closeConnections()
+	session.LastChunkHash = [32]byte{}
 	return session, nil
 }
 
@@ -375,7 +390,7 @@ func (manager *Manager) PrepareChunk(id string, index uint64, frame []byte) (rec
 	session.Mu.Lock()
 	defer session.Mu.Unlock()
 	if session.State != Transferring || session.Receiver == nil || index != session.NextChunk || len(frame)-16 > session.Metadata.ChunkSize {
-		if session.State == Transferring && session.Receiver != nil && session.HasLastChunk() && bytes.Equal(frame, session.LastChunk) {
+		if session.State == Transferring && session.Receiver != nil && session.MatchesLastChunk(frame) {
 			return session.Receiver, session.Sender, true, nil
 		}
 		return nil, nil, false, ErrInvalidState
@@ -393,7 +408,7 @@ func (manager *Manager) RecordChunk(id string, index uint64, frame []byte) {
 	defer session.Mu.Unlock()
 	if session.State == Transferring && index+1 == session.NextChunk {
 		session.LastChunkIndex = index
-		session.LastChunk = append(session.LastChunk[:0], frame...)
+		session.SetLastChunk(frame)
 	}
 }
 

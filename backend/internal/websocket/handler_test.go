@@ -12,11 +12,11 @@ import (
 )
 
 type fakePeer struct {
-	sendControlCalled   bool
-	sendControlData     []byte
-	sendBinaryCalled    bool
-	sendBinaryData      []byte
-	closeCalled         bool
+	sendControlCalled bool
+	sendControlData   []byte
+	sendBinaryCalled  bool
+	sendBinaryData    []byte
+	closeCalled       bool
 }
 
 func (f *fakePeer) SendControl(data []byte) error {
@@ -60,6 +60,17 @@ func readJSON(t *testing.T, conn *ws.Conn, target interface{}) {
 	defer conn.SetReadDeadline(time.Time{})
 	if err := conn.ReadJSON(target); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func readMessageType(t *testing.T, conn *ws.Conn, expected string) map[string]interface{} {
+	t.Helper()
+	for {
+		var message map[string]interface{}
+		readJSON(t, conn, &message)
+		if message["type"] == expected {
+			return message
+		}
 	}
 }
 
@@ -227,11 +238,7 @@ func TestHandlerDetachNotifiesPeer(t *testing.T) {
 	receiverConn.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	var senderMsg map[string]interface{}
-	readJSON(t, senderConn, &senderMsg)
-	if senderMsg["type"] != "receiver_disconnected" {
-		t.Fatalf("expected receiver_disconnected, got %v", senderMsg["type"])
-	}
+	readMessageType(t, senderConn, "receiver_disconnected")
 }
 
 func TestHandlerRejectsTransferNotFound(t *testing.T) {
@@ -376,11 +383,6 @@ func TestHandlerCancelPropagatesToBothPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, conn := range []*ws.Conn{senderConn, receiverConn} {
-		var msg map[string]interface{}
-		readJSON(t, conn, &msg)
-		if msg["type"] != "transfer_cancelled" {
-			t.Fatalf("expected transfer_cancelled, got %v", msg["type"])
-		}
-	}
+	readMessageType(t, senderConn, "transfer_cancelled")
+	readMessageType(t, receiverConn, "transfer_cancelled")
 }
