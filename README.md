@@ -78,6 +78,20 @@ npm run test:e2e
 
 The test runner reuses already-running servers (see `frontend/playwright.config.ts`), so you can also run it against a live dev session on port 5173.
 
+### Load testing (backend)
+
+`backend/loadtest` drives a running backend through the real client protocol (HTTP create → WebSocket join/accept → chunk/ACK streaming) to produce capacity numbers:
+
+```powershell
+# Start a backend with raised creation limits first, then:
+cd backend
+go run ./loadtest -mode stream -count 30 -size 2097152 -chunk 262144   # concurrent transfers
+go run ./loadtest -mode idle   -count 200 -keepalive 1.5s              # idle attached sessions
+go run ./loadtest -mode reconnect -count 100                            # join/drop churn
+```
+
+`-url` points at the backend (default `http://localhost:8080`); raise `CREATE_RATE_PER_MINUTE` for the target concurrency, since the default 20/min per-IP creation limit is the first ceiling you will hit. Observed on a local 1-core run: ~255 MB/s aggregate with 30 concurrent 2 MB transfers; degradation and intermittent failures begin around 40–100 concurrent bursts, which is the signal for profiling `peerQueueSize` and connection scheduling before production capacity planning.
+
 ## Configuration
 
 ### Backend environment variables
