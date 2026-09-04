@@ -8,6 +8,9 @@ const ADAPTIVE_MIN_CHUNK = 256 * 1024;
 const ADAPTIVE_GROWTH_AFTER_ACKS = 4;
 const ADAPTIVE_GROW = 1.25;
 const ADAPTIVE_SHRINK = 0.5;
+const WINDOW_MIN = 2;
+const WINDOW_MAX = 16;
+const WINDOW_START = 4;
 
 export class WebSocketRelayTransport implements TransferTransport {
   private role: 'sender' | 'receiver';
@@ -31,7 +34,8 @@ export class WebSocketRelayTransport implements TransferTransport {
 
   private pendingAcks = new Map<number, { resolve: () => void; reject: (err: Error) => void }>();
   private acknowledged = 0;
-  private windowSize = 4;
+  private windowSize = WINDOW_START;
+  private windowAckCount = 0;
   private maxAttempts = 3;
   private frames = new Map<number, ArrayBuffer>();
   private timeouts = new Map<number, number>();
@@ -73,8 +77,16 @@ export class WebSocketRelayTransport implements TransferTransport {
 
   private onChunkAcknowledged(index: number) {
     this.acksSinceResize++;
+    this.windowAckCount++;
     if (this.acksSinceResize >= ADAPTIVE_GROWTH_AFTER_ACKS && this.currentChunkSize < this.maxChunkSize) {
       this.adjustSize(this.currentChunkSize * ADAPTIVE_GROW);
+    }
+    // Additive window increase: after a full clean window has been acknowledged,
+    // widen the window by one (capped at the server's parallel admission window).
+    if (this.windowAckCount >= this.windowSize && this.windowSize < WINDOW_MAX) {
+      this.windowSize = Math.min(WINDOW_MAX, this.windowSize + 1);
+      this.windowAckCount = 0;
+      logger.debug(`[WebSocketRelayTransport] Adaptive window -> ${this.windowSize}`);
     }
   }
 
@@ -82,6 +94,11 @@ export class WebSocketRelayTransport implements TransferTransport {
     if (this.currentChunkSize > ADAPTIVE_MIN_CHUNK) {
       this.adjustSize(this.currentChunkSize * ADAPTIVE_SHRINK);
     }
+    // Multiplicative window decrease on loss: halve the in-flight window.
+    if (this.windowSize > WINDOW_MIN) {
+      this.windowSize = Math.max(WINDOW_MIN, Math.floor(this.windowSize / 2));
+    }
+    this.windowAckCount = 0;
   }
 
   async connect(): Promise<void> {
