@@ -236,7 +236,7 @@ func (handler *Handler) forward(id string, frame []byte) bool {
 	if !ok {
 		return false
 	}
-	receiver, sender, duplicate, err := handler.Manager.PrepareChunk(id, index, frame)
+	receiver, sender, err := handler.Manager.PrepareChunk(id, index, frame)
 	if err != nil || receiver == nil {
 		return false
 	}
@@ -245,9 +245,6 @@ func (handler *Handler) forward(id string, frame []byte) bool {
 		return false
 	}
 	handler.Manager.RecordBytesRelayed(len(payload))
-	if !duplicate {
-		handler.Manager.RecordChunk(id, index, frame)
-	}
 	return sender == nil || sender.SendControl(controlBytes(control{Type: "chunk_ack", ChunkIndex: index})) == nil
 }
 func (handler *Handler) control(id string, role transfer.Role, message control) {

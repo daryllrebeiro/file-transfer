@@ -156,17 +156,8 @@ func TestHandlerFullTransferFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var senderMsg map[string]interface{}
-	readJSON(t, senderConn, &senderMsg)
-	if senderMsg["type"] != "transfer_offer" {
-		t.Fatalf("sender expected transfer_offer, got %v", senderMsg["type"])
-	}
-
-	var receiverMsg map[string]interface{}
-	readJSON(t, receiverConn, &receiverMsg)
-	if receiverMsg["type"] != "transfer_offer" {
-		t.Fatalf("receiver expected transfer_offer, got %v", receiverMsg["type"])
-	}
+	readMessageType(t, senderConn, "transfer_offer")
+	readMessageType(t, receiverConn, "transfer_offer")
 
 	if err := receiverConn.WriteJSON(map[string]string{"type": "accept_transfer"}); err != nil {
 		t.Fatal(err)
@@ -228,11 +219,7 @@ func TestHandlerDetachNotifiesPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, conn := range []*ws.Conn{senderConn, receiverConn} {
-		var msg map[string]interface{}
-		readJSON(t, conn, &msg)
-		if msg["type"] != "transfer_offer" {
-			t.Fatalf("expected transfer_offer, got %v", msg["type"])
-		}
+		readMessageType(t, conn, "transfer_offer")
 	}
 
 	receiverConn.Close()
@@ -317,11 +304,7 @@ func TestHandlerRoutesWebRTCMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, conn := range []*ws.Conn{senderConn, receiverConn} {
-		var msg map[string]interface{}
-		readJSON(t, conn, &msg)
-		if msg["type"] != "transfer_offer" {
-			t.Fatalf("expected transfer_offer, got %v", msg["type"])
-		}
+		readMessageType(t, conn, "transfer_offer")
 	}
 
 	if err := senderConn.WriteJSON(map[string]string{"type": "webrtc_offer", "sdp": "offer-sdp"}); err != nil {
@@ -372,11 +355,7 @@ func TestHandlerCancelPropagatesToBothPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, conn := range []*ws.Conn{senderConn, receiverConn} {
-		var msg map[string]interface{}
-		readJSON(t, conn, &msg)
-		if msg["type"] != "transfer_offer" {
-			t.Fatalf("expected transfer_offer, got %v", msg["type"])
-		}
+		readMessageType(t, conn, "transfer_offer")
 	}
 
 	if err := senderConn.WriteJSON(map[string]string{"type": "transfer_cancelled"}); err != nil {

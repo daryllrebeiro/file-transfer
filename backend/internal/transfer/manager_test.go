@@ -117,7 +117,7 @@ func TestManagerResumesPausedTransferAfterReconnect(t *testing.T) {
 	}
 }
 
-func TestManagerAllowsExactLastChunkRetransmission(t *testing.T) {
+func TestManagerAcceptsOutOfOrderWithinWindowAndRetransmitsPastFloor(t *testing.T) {
 	manager := NewManager(time.Minute, 100, 10)
 	session, err := manager.Create(Metadata{FileName: "a", FileSize: 10, ChunkSize: 5})
 	if err != nil {
@@ -133,19 +133,32 @@ func TestManagerAllowsExactLastChunkRetransmission(t *testing.T) {
 	if _, err = manager.Accept(session.ID); err != nil {
 		t.Fatal(err)
 	}
-	frame := EncodeChunk(0, []byte("hello"))
-	receiver, sender, duplicate, err := manager.PrepareChunk(session.ID, 0, frame)
-	if err != nil || receiver == nil || sender == nil || duplicate {
-		t.Fatal("expected first chunk admission")
+	// Chunk 3 admitted before chunks 0-2 (out of order within the parallel window).
+	receiver, sender, err := manager.PrepareChunk(session.ID, 3, EncodeChunk(3, []byte("hello")))
+	if err != nil || receiver == nil || sender == nil {
+		t.Fatal("expected out-of-order admission within window")
 	}
-	manager.RecordChunk(session.ID, 0, frame)
-	_, _, duplicate, err = manager.PrepareChunk(session.ID, 0, frame)
-	if err != nil || !duplicate {
-		t.Fatal("expected exact duplicate admission")
+	if _, _, err = manager.PrepareChunk(session.ID, 0, EncodeChunk(0, []byte("zero"))); err != nil {
+		t.Fatal(err)
 	}
-	altered := EncodeChunk(0, []byte("world"))
-	if _, _, duplicate, err = manager.PrepareChunk(session.ID, 0, altered); err == nil || duplicate {
-		t.Fatal("rejected altered duplicate")
+	next, err := manager.NextChunk(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next != 1 {
+		t.Fatalf("expected contiguous floor to advance to 1, got %d", next)
+	}
+	// Retransmission of an already-contiguous chunk (index < floor) is re-forwarded, not rejected.
+	if _, _, err = manager.PrepareChunk(session.ID, 0, EncodeChunk(0, []byte("zero"))); err != nil {
+		t.Fatal("expected retransmission past floor to be admitted")
+	}
+	// Far-future indices beyond the parallel window are rejected.
+	if _, _, err = manager.PrepareChunk(session.ID, ParallelWindow+5, EncodeChunk(ParallelWindow+5, []byte("far"))); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("expected far-future index rejection, got %v", err)
+	}
+	// Oversized frames are rejected.
+	if _, _, err = manager.PrepareChunk(session.ID, 1, EncodeChunk(1, make([]byte, 64))); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("expected oversized frame rejection, got %v", err)
 	}
 }
 

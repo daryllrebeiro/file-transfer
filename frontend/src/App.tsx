@@ -359,7 +359,11 @@ function Sender() {
     transport.onStatusChange((status, mode) => {
       setTransportStatus(status);
       setActiveMode(mode);
-      if (status === 'connected' || status === 'transferring' || status === 'completed') {
+      // A sender may only begin streaming once the receiver has accepted. For relay the
+      // 'connected' state fires at join (before acceptance); only WebRTC's 'connected'
+      // already implies an established, post-accept data channel.
+      const canStart = status === 'transferring' || (status === 'connected' && mode === 'webrtc');
+      if (canStart || status === 'completed') {
         setWaiting(false);
       }
       
@@ -371,7 +375,7 @@ function Sender() {
         setDcState('n/a');
       }
 
-      if (status === 'connected' || status === 'transferring') {
+      if (canStart) {
         if (!sending) {
           sending = true;
           startChunk.current = transport.getStartChunk?.() || 0;

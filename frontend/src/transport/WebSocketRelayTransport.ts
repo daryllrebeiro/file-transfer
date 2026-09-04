@@ -94,26 +94,57 @@ export class WebSocketRelayTransport implements TransferTransport {
     this.removeMessageListener = this.client.onMessage(msg => this.handleMessage(msg));
     
     if (this.role === 'receiver') {
-      this.removeBinaryListener = this.client.onBinary(buf => {
-        try {
-          const chunk = parseChunk(buf);
-          if (this.chunkCallback) {
-            this.chunkCallback({ index: chunk.index, bytes: chunk.bytes });
-          }
-        } catch (e) {
-          this.handleError('Invalid chunk received.');
-        }
-      });
+      this.removeBinaryListener = this.client.onBinary(buf => this.handleBinary(buf));
     }
   }
 
   private startChunk = 0;
+  private receiveBuffer = new Map<number, ReceivedChunk>();
+  private receiveFloor = 0;
+  private readonly reorderWindow = 32;
+
+  private handleBinary(buf: ArrayBuffer) {
+    let chunk: { index: number; bytes: ArrayBuffer };
+    try {
+      chunk = parseChunk(buf);
+    } catch {
+      this.handleError('Invalid chunk received.');
+      return;
+    }
+    if (chunk.index < this.receiveFloor) {
+      return; // duplicate already emitted
+    }
+    if (chunk.index === this.receiveFloor) {
+      this.emitChunk(chunk);
+      return;
+    }
+    if (chunk.index < this.receiveFloor + this.reorderWindow && !this.receiveBuffer.has(chunk.index)) {
+      this.receiveBuffer.set(chunk.index, chunk);
+    }
+  }
+
+  private emitChunk(chunk: ReceivedChunk) {
+    if (!this.chunkCallback) return;
+    this.chunkCallback(chunk);
+    this.receiveFloor = chunk.index + 1;
+    let next = this.receiveBuffer.get(this.receiveFloor);
+    while (next) {
+      this.receiveBuffer.delete(this.receiveFloor);
+      this.chunkCallback(next);
+      this.receiveFloor = next.index + 1;
+      next = this.receiveBuffer.get(this.receiveFloor);
+    }
+  }
 
   private handleMessage(msg: Message) {
     if (msg.type === 'error') {
       this.handleError(msg.message || 'Connection error.');
     } else if (msg.type === 'transfer_offer') {
       this.startChunk = msg.nextChunk || 0;
+      if (this.role === 'receiver') {
+        this.receiveFloor = msg.nextChunk || 0;
+        this.receiveBuffer.clear();
+      }
       if (msg.metadata) {
         this.metadataCallback?.(msg.metadata);
       }

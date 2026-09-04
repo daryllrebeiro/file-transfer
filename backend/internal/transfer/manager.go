@@ -326,7 +326,7 @@ func (manager *Manager) Complete(id string) (*Session, error) {
 	if err := transition(&session.State, Completed); err != nil {
 		return nil, err
 	}
-	session.LastChunkHash = [32]byte{}
+	session.accepted = nil
 	return session, nil
 }
 
@@ -343,7 +343,7 @@ func (manager *Manager) Cancel(id string) (*Session, error) {
 	if err := transition(&session.State, Cancelled); err != nil {
 		return nil, err
 	}
-	session.LastChunkHash = [32]byte{}
+	session.accepted = nil
 	return session, nil
 }
 
@@ -428,34 +428,38 @@ func (manager *Manager) Connections(id string) (sender, receiver Peer, ok bool) 
 	return session.Sender, session.Receiver, true
 }
 
-func (manager *Manager) PrepareChunk(id string, index uint64, frame []byte) (receiver, sender Peer, duplicate bool, err error) {
+func (manager *Manager) PrepareChunk(id string, index uint64, frame []byte) (receiver, sender Peer, err error) {
 	session, err := manager.getActive(id)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, err
 	}
 	session.Mu.Lock()
 	defer session.Mu.Unlock()
-	if session.State != Transferring || session.Receiver == nil || index != session.NextChunk || len(frame)-16 > session.Metadata.ChunkSize {
-		if session.State == Transferring && session.Receiver != nil && session.MatchesLastChunk(frame) {
-			return session.Receiver, session.Sender, true, nil
+	if session.State != Transferring || session.Receiver == nil {
+		return nil, nil, ErrInvalidState
+	}
+	if index < session.NextChunk {
+		// Already past the contiguous floor: ACK-loss retransmission. Re-forward so the
+		// receiver (which drops duplicates by index) and sender see consistent ACKs.
+		return session.Receiver, session.Sender, nil
+	}
+	if len(frame)-16 > session.Metadata.ChunkSize {
+		return nil, nil, ErrInvalidState
+	}
+	if index >= session.NextChunk+ParallelWindow {
+		return nil, nil, ErrInvalidState
+	}
+	if session.accepted == nil {
+		session.accepted = make(map[uint64]bool)
+	}
+	if !session.accepted[index] {
+		session.accepted[index] = true
+		for session.accepted[session.NextChunk] {
+			delete(session.accepted, session.NextChunk)
+			session.NextChunk++
 		}
-		return nil, nil, false, ErrInvalidState
 	}
-	session.NextChunk++
-	return session.Receiver, session.Sender, false, nil
-}
-
-func (manager *Manager) RecordChunk(id string, index uint64, frame []byte) {
-	session, ok := manager.Get(id)
-	if !ok {
-		return
-	}
-	session.Mu.Lock()
-	defer session.Mu.Unlock()
-	if session.State == Transferring && index+1 == session.NextChunk {
-		session.LastChunkIndex = index
-		session.SetLastChunk(frame)
-	}
+	return session.Receiver, session.Sender, nil
 }
 
 func (manager *Manager) Delete(id string) {

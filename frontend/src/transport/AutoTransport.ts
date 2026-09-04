@@ -56,6 +56,14 @@ export class AutoTransport implements TransferTransport {
           this.triggerFallback();
         }, timeout);
       } else if (msg.type === 'transfer_offer' && this.role === 'receiver') {
+        if (msg.metadata) {
+          this.metadataCallback?.(msg.metadata);
+        }
+        if (msg.metadata && msg.metadata.transport === 'relay') {
+          logger.debug('[AutoTransport] Sender uses relay; switching to relay immediately.');
+          this.triggerFallback();
+          return;
+        }
         const timeout = Number(import.meta.env.VITE_WEBRTC_CONNECTION_TIMEOUT || 10000);
         window.clearTimeout(this.fallbackTimer);
         this.fallbackTimer = window.setTimeout(() => {
@@ -193,6 +201,9 @@ export class AutoTransport implements TransferTransport {
   }
 
   accept(): void {
+    if (this.role === 'receiver' && this.client) {
+      this.client.send({ type: 'accept_transfer' });
+    }
     this.activeTransport?.accept?.();
   }
 
