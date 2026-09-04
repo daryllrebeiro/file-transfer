@@ -8,6 +8,7 @@ import type { Metadata } from './types';
 import { createTransferTransport, type TransportMode, type TransportStatus } from './transport/TransportFactory';
 import { type TransferTransport } from './transport/TransferTransport';
 import { logger } from './services/logger';
+import { addHistory, clearHistory, getHistory, updateHistory, type HistoryEntry } from './services/history';
 
 const chunkSize = 2 * 1024 * 1024;
 const bytes = (value: number) => value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(2)} MB` : `${(value / 1024 ** 3).toFixed(2)} GB`;
@@ -44,6 +45,7 @@ function Home() {
     return (import.meta.env.VITE_DEFAULT_TRANSPORT as TransportMode) || 'auto';
   };
   const [transportMode, setTransportMode] = useState<TransportMode>(getInitialTransport());
+  const [history, setHistory] = useState<HistoryEntry[]>(() => getHistory());
 
   const choose = (selected?: File) => { if (selected) setFile(selected); };
 
@@ -86,6 +88,8 @@ function Home() {
         expiresAt: result.expiresAt,
         transport: transportMode
       }));
+      addHistory({ id: result.id, name: file.name, size: file.size, ts: Date.now(), outcome: 'created' });
+      setHistory(getHistory());
       navigate(`/transfer/${result.id}`, { state: { file, url: result.url, senderToken: result.senderToken, sha256, expiresAt: result.expiresAt, transport: transportMode } });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not create transfer.');
@@ -196,6 +200,38 @@ function Home() {
           <span>◷</span>
           <div><strong>Streamed in chunks</strong><br/><span>Integrity checked with SHA-256.</span></div>
         </div>
+
+        {history.length > 0 && (
+          <section className="history" aria-label="Recent transfers">
+            <div className="history-head">
+              <h2>Recent transfers</h2>
+              <button className="secondary" onClick={() => { clearHistory(); setHistory([]); }}>Clear</button>
+            </div>
+            <ul>
+              {history.map(entry => {
+                const resumable = (() => { try { return !!sessionStorage.getItem(`sender:${entry.id}`); } catch { return false; } })();
+                return (
+                  <li key={entry.id}>
+                    {resumable ? (
+                      <button className="history-row" onClick={() => navigate(`/transfer/${entry.id}`)}>
+                        <span className="history-outcome" data-outcome={entry.outcome} aria-hidden="true" />
+                        <span className="history-name">{entry.name}</span>
+                        <span className="history-meta">{bytes(entry.size)} · {new Date(entry.ts).toLocaleString()} · {entry.outcome === 'sent' ? 'Sent' : entry.outcome === 'failed' ? 'Failed' : 'Created'}</span>
+                        <span className="history-resume">Resume →</span>
+                      </button>
+                    ) : (
+                      <span className="history-row history-row-static">
+                        <span className="history-outcome" data-outcome={entry.outcome} aria-hidden="true" />
+                        <span className="history-name">{entry.name}</span>
+                        <span className="history-meta">{bytes(entry.size)} · {new Date(entry.ts).toLocaleString()} · {entry.outcome === 'sent' ? 'Sent' : entry.outcome === 'failed' ? 'Failed' : 'Created'}</span>
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
       </section>
     </Shell>
   );
@@ -296,6 +332,18 @@ function Sender() {
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [expiresAt]);
+
+  const historyRecorded = useRef(false);
+  useEffect(() => {
+    if (!transferId || historyRecorded.current) return;
+    if (transportStatus === 'completed') {
+      historyRecorded.current = true;
+      updateHistory(transferId, { outcome: 'sent', ts: Date.now() });
+    } else if (transportStatus === 'failed') {
+      historyRecorded.current = true;
+      updateHistory(transferId, { outcome: 'failed', ts: Date.now() });
+    }
+  }, [transportStatus, transferId]);
 
   async function handleExtend() {
     if (!transferId || !senderToken || !expiresAt) return;
