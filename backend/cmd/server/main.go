@@ -27,7 +27,7 @@ func main() {
 	}
 	manager := transfer.NewManager(settings.TransferTTL, settings.MaxFileSize, settings.MaxChunkSize)
 	manager.SetLimits(settings.MaxActiveTransfers, settings.MaxConnections)
-	api := &httpapi.Server{Manager: manager, BaseURL: settings.PublicBaseURL, CreateLimiter: httpapi.NewCreationLimiter(settings.CreateRatePerMinute), MetricsToken: settings.MetricsToken, TrustProxy: settings.TrustProxy}
+	api := &httpapi.Server{Manager: manager, BaseURL: settings.PublicBaseURL, CreateLimiter: httpapi.NewCreationLimiter(settings.CreateRatePerMinute), MetricsToken: settings.MetricsToken, MetricsFormat: settings.MetricsFormat, TrustProxy: settings.TrustProxy}
 	mux := http.NewServeMux()
 	mux.Handle("/api/", httpapi.SecurityHeaders(httpapi.CORS(settings.AllowedOrigins, api.Routes())))
 	mux.Handle("/healthz", httpapi.SecurityHeaders(api.Routes()))

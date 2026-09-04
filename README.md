@@ -148,7 +148,7 @@ The transport layer is pluggable (`frontend/src/transport/`): WebRTC uses a 60 K
 
 ## Metrics
 
-`GET /metrics` returns process-local JSON counters for `activeTransfers`, `activeConnections`, `createdTransfers`, `completedTransfers`, `cancelledTransfers`, `expiredTransfers`, `failedTransfers`, `bytesRelayed`, and `queueSaturated`. Metrics are held in memory and reset when the backend instance restarts. They never contain file names, file contents, transfer IDs, or tokens. The endpoint requires `Authorization: Bearer {METRICS_TOKEN}` and returns 404 when no token is configured.
+`GET /metrics` returns process-local counters for `activeTransfers`, `activeConnections`, `createdTransfers`, `completedTransfers`, `cancelledTransfers`, `expiredTransfers`, `failedTransfers`, `bytesRelayed`, and `queueSaturated`. Set `METRICS_FORMAT=prometheus` to expose the same values in Prometheus text exposition format (`relay_active_transfers` gauge, `relay_transfers_created_total`-style counters). Metrics are held in memory and reset when the backend instance restarts. They never contain file names, file contents, transfer IDs, or tokens. The endpoint requires `Authorization: Bearer {METRICS_TOKEN}` and returns 404 when no token is configured.
 
 ## Security and limitations
 

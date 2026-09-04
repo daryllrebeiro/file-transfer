@@ -29,6 +29,24 @@ func TestMetricsRequiresToken(t *testing.T) {
 	}
 }
 
+func TestMetricsPrometheusFormat(t *testing.T) {
+	server := &Server{Manager: transfer.NewManager(time.Minute, 100, 10), MetricsToken: "metrics-secret", MetricsFormat: "prometheus"}
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("Authorization", "Bearer metrics-secret")
+	response := httptest.NewRecorder()
+	server.metrics(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", response.Code)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "relay_active_transfers 0") || !strings.Contains(body, "relay_transfers_created_total") {
+		t.Fatalf("unexpected prometheus body: %s", body)
+	}
+	if !strings.Contains(response.Header().Get("Content-Type"), "text/plain") {
+		t.Fatalf("unexpected content type: %s", response.Header().Get("Content-Type"))
+	}
+}
+
 func TestClientIPDoesNotTrustForwardedHeaderByDefault(t *testing.T) {
 	server := &Server{}
 	request := httptest.NewRequest(http.MethodPost, "/api/transfers", nil)

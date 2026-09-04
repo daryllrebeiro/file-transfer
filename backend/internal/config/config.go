@@ -22,6 +22,7 @@ type Config struct {
 	WriteTimeout        time.Duration
 	LogFormat           string
 	LogLevel            string
+	MetricsFormat       string
 }
 
 func Load() Config {
@@ -29,7 +30,7 @@ func Load() Config {
 		Port: env("PORT", "8080"), PublicBaseURL: env("PUBLIC_BASE_URL", "http://localhost:5173"),
 		AllowedOrigins: split(env("ALLOWED_ORIGINS", "http://localhost:5173")),
 		TransferTTL:    duration("TRANSFER_TTL", 15*time.Minute), MaxFileSize: integer("MAX_FILE_SIZE", 10<<30), MaxChunkSize: int(integer("MAX_CHUNK_SIZE", 2<<20)),
-		MaxActiveTransfers: int(integer("MAX_ACTIVE_TRANSFERS", 1000)), MaxConnections: int(integer("MAX_CONNECTIONS", 2000)), CreateRatePerMinute: int(integer("CREATE_RATE_PER_MINUTE", 20)), MetricsToken: os.Getenv("METRICS_TOKEN"), TrustProxy: boolean("TRUST_PROXY", false), WriteTimeout: duration("WRITE_TIMEOUT", 5*time.Minute), LogFormat: env("LOG_FORMAT", "text"), LogLevel: env("LOG_LEVEL", "info"),
+		MaxActiveTransfers: int(integer("MAX_ACTIVE_TRANSFERS", 1000)), MaxConnections: int(integer("MAX_CONNECTIONS", 2000)), CreateRatePerMinute: int(integer("CREATE_RATE_PER_MINUTE", 20)), MetricsToken: os.Getenv("METRICS_TOKEN"), TrustProxy: boolean("TRUST_PROXY", false), WriteTimeout: duration("WRITE_TIMEOUT", 5*time.Minute), LogFormat: env("LOG_FORMAT", "text"), LogLevel: env("LOG_LEVEL", "info"), MetricsFormat: env("METRICS_FORMAT", "json"),
 	}
 }
 func boolean(key string, fallback bool) bool {

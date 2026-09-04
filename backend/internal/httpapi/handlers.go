@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -19,6 +20,7 @@ type Server struct {
 	BaseURL       string
 	CreateLimiter *CreationLimiter
 	MetricsToken  string
+	MetricsFormat string
 	TrustProxy    bool
 }
 type CreationLimiter struct {
@@ -85,7 +87,21 @@ func (server *Server) metrics(w http.ResponseWriter, request *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, http.StatusOK, server.Manager.Metrics())
+	metrics := server.Manager.Metrics()
+	if server.MetricsFormat == "prometheus" {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		fmt.Fprintf(w, "# HELP relay_active_transfers Current in-memory transfer sessions.\n# TYPE relay_active_transfers gauge\nrelay_active_transfers %d\n", metrics.ActiveTransfers)
+		fmt.Fprintf(w, "# HELP relay_active_connections Current WebSocket connections.\n# TYPE relay_active_connections gauge\nrelay_active_connections %d\n", metrics.ActiveConnections)
+		fmt.Fprintf(w, "# HELP relay_transfers_created_total Transfers created.\n# TYPE relay_transfers_created_total counter\nrelay_transfers_created_total %d\n", metrics.CreatedTransfers)
+		fmt.Fprintf(w, "# TYPE relay_transfers_completed_total counter\nrelay_transfers_completed_total %d\n", metrics.CompletedTransfers)
+		fmt.Fprintf(w, "# TYPE relay_transfers_cancelled_total counter\nrelay_transfers_cancelled_total %d\n", metrics.CancelledTransfers)
+		fmt.Fprintf(w, "# TYPE relay_transfers_expired_total counter\nrelay_transfers_expired_total %d\n", metrics.ExpiredTransfers)
+		fmt.Fprintf(w, "# TYPE relay_transfers_failed_total counter\nrelay_transfers_failed_total %d\n", metrics.FailedTransfers)
+		fmt.Fprintf(w, "# TYPE relay_bytes_relayed_total counter\nrelay_bytes_relayed_total %d\n", metrics.BytesRelayed)
+		fmt.Fprintf(w, "# TYPE relay_queue_saturated_total counter\nrelay_queue_saturated_total %d\n", metrics.QueueSaturated)
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics)
 }
 func (server *Server) create(w http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
