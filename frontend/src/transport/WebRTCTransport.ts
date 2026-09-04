@@ -16,7 +16,7 @@ function encodeSubChunk(chunkIndex: number, subIndex: number, totalSubChunks: nu
   return header;
 }
 
-function decodeSubChunk(buffer: ArrayBuffer) {
+function parseSubChunk(buffer: ArrayBuffer) {
   if (buffer.byteLength < 20) throw new Error('Invalid sub-chunk');
   const view = new DataView(buffer);
   const chunkIndex = Number(view.getBigUint64(0));
@@ -24,8 +24,7 @@ function decodeSubChunk(buffer: ArrayBuffer) {
   const totalSubChunks = view.getUint32(12);
   const length = view.getUint32(16);
   if (length !== buffer.byteLength - 20) throw new Error('Payload size mismatch');
-  const payload = buffer.slice(20);
-  return { chunkIndex, subIndex, totalSubChunks, payload };
+  return { chunkIndex, subIndex, totalSubChunks, payloadStart: 20, payloadLength: length };
 }
 
 export class WebRTCTransport implements TransferTransport {
@@ -50,7 +49,7 @@ export class WebRTCTransport implements TransferTransport {
   private unsubscribeSignaling?: () => void;
 
   // Assembly map for receiving sub-chunks
-  private receiveAssembly = new Map<number, { receivedCount: number, subChunks: ArrayBuffer[] }>();
+  private receiveAssembly = new Map<number, { receivedCount: number, subChunks: Array<{ data: ArrayBuffer; length: number } | undefined> }>();
 
   constructor(role: 'sender' | 'receiver', signaling: TransferClient, id: string, file?: File, metadata?: Metadata) {
     this.role = role;
@@ -159,7 +158,8 @@ export class WebRTCTransport implements TransferTransport {
     if (this.role === 'receiver') {
       this.dataChannel.onmessage = event => {
         try {
-          const sub = decodeSubChunk(event.data as ArrayBuffer);
+          const frame = event.data as ArrayBuffer;
+          const sub = parseSubChunk(frame);
           if (sub.totalSubChunks === 0) {
             if (sub.subIndex === 1) {
               logger.debug('[WebRTCTransport] [receiver] Received transfer_complete control frame over DataChannel');
@@ -172,17 +172,18 @@ export class WebRTCTransport implements TransferTransport {
             assembly = { receivedCount: 0, subChunks: new Array(sub.totalSubChunks) };
             this.receiveAssembly.set(sub.chunkIndex, assembly);
           }
-          assembly.subChunks[sub.subIndex] = sub.payload;
+          assembly.subChunks[sub.subIndex] = { data: frame, length: sub.payloadLength };
           assembly.receivedCount++;
 
           if (assembly.receivedCount === sub.totalSubChunks) {
-            // Reconstitution of full chunk
-            const totalBytes = assembly.subChunks.reduce((acc, c) => acc + c.byteLength, 0);
+            // Reconstitute the full chunk with a single copy straight from the sub-frames.
+            const totalBytes = assembly.subChunks.reduce((acc, slot) => acc + (slot ? slot.length : 0), 0);
             const fullBuffer = new Uint8Array(totalBytes);
             let offset = 0;
-            for (const subBuf of assembly.subChunks) {
-              fullBuffer.set(new Uint8Array(subBuf), offset);
-              offset += subBuf.byteLength;
+            for (const slot of assembly.subChunks) {
+              if (!slot) continue;
+              fullBuffer.set(new Uint8Array(slot.data, sub.payloadStart, slot.length), offset);
+              offset += slot.length;
             }
             this.receiveAssembly.delete(sub.chunkIndex);
 
