@@ -42,8 +42,15 @@ type TokenPair struct {
 	ReceiverToken string
 }
 
+const managerShards = 16
+
+type sessionShard struct {
+	mu       sync.RWMutex
+	sessions map[string]*Session
+}
+
 type Manager struct {
-	sessions           map[string]*Session
+	shards             [managerShards]sessionShard
 	mu                 sync.RWMutex
 	ttl                time.Duration
 	maxFileSize        int64
@@ -51,6 +58,7 @@ type Manager struct {
 	maxActiveTransfers int
 	maxConnections     int
 	connections        int
+	transferCount      int
 	created            atomic.Uint64
 	completed          atomic.Uint64
 	cancelled          atomic.Uint64
@@ -78,7 +86,19 @@ type Limits struct {
 }
 
 func NewManager(ttl time.Duration, maxFileSize int64, maxChunkSize int) *Manager {
-	return &Manager{sessions: make(map[string]*Session), ttl: ttl, maxFileSize: maxFileSize, maxChunkSize: maxChunkSize, maxActiveTransfers: 1000, maxConnections: 2000}
+	manager := &Manager{ttl: ttl, maxFileSize: maxFileSize, maxChunkSize: maxChunkSize, maxActiveTransfers: 1000, maxConnections: 2000}
+	for index := range manager.shards {
+		manager.shards[index].sessions = make(map[string]*Session)
+	}
+	return manager
+}
+
+func (manager *Manager) shardFor(id string) int {
+	var hash uint32
+	for index := 0; index < len(id); index++ {
+		hash = hash*31 + uint32(id[index])
+	}
+	return int(hash % managerShards)
 }
 
 func (manager *Manager) SetLimits(maxActiveTransfers, maxConnections int) {
@@ -123,12 +143,21 @@ func (manager *Manager) create(metadata Metadata, withTokens bool) (*Session, To
 	if err != nil {
 		return nil, TokenPair{}, err
 	}
+	var pair TokenPair
+	if withTokens {
+		pair, err = newTokenPair()
+		if err != nil {
+			return nil, TokenPair{}, err
+		}
+	}
 	now := time.Now()
 	manager.mu.Lock()
-	if manager.maxActiveTransfers > 0 && len(manager.sessions) >= manager.maxActiveTransfers {
+	if manager.maxActiveTransfers > 0 && manager.transferCount >= manager.maxActiveTransfers {
 		manager.mu.Unlock()
 		return nil, TokenPair{}, ErrTransferLimit
 	}
+	manager.transferCount++
+	manager.mu.Unlock()
 	session := &Session{
 		ID:              id,
 		Metadata:        metadata,
@@ -138,18 +167,14 @@ func (manager *Manager) create(metadata Metadata, withTokens bool) (*Session, To
 		TransportMode:   TransportMode(metadata.Transport),
 		ActiveTransport: TransportMode(metadata.Transport),
 	}
-	var pair TokenPair
 	if withTokens {
-		pair, err = newTokenPair()
-		if err != nil {
-			manager.mu.Unlock()
-			return nil, TokenPair{}, err
-		}
 		session.SenderTokenHash = hashToken(pair.SenderToken)
 		session.ReceiverTokenHash = hashToken(pair.ReceiverToken)
 	}
-	manager.sessions[id] = session
-	manager.mu.Unlock()
+	shard := &manager.shards[manager.shardFor(id)]
+	shard.mu.Lock()
+	shard.sessions[id] = session
+	shard.mu.Unlock()
 	manager.created.Add(1)
 	return session, pair, nil
 }
@@ -174,10 +199,11 @@ func newToken() (string, error) {
 }
 func hashToken(token string) [32]byte { return sha256.Sum256([]byte(token)) }
 func (manager *Manager) ValidateToken(id string, role Role, token string) error {
-	manager.mu.RLock()
-	session, ok := manager.sessions[id]
+	shard := &manager.shards[manager.shardFor(id)]
+	shard.mu.RLock()
+	session, ok := shard.sessions[id]
+	shard.mu.RUnlock()
 	if !ok {
-		manager.mu.RUnlock()
 		return ErrTransferNotFound
 	}
 	presented := hashToken(token)
@@ -188,15 +214,12 @@ func (manager *Manager) ValidateToken(id string, role Role, token string) error 
 	case ReceiverRole:
 		expected = session.ReceiverTokenHash
 	default:
-		manager.mu.RUnlock()
 		return ErrInvalidRole
 	}
-	valid := expected != [32]byte{} && subtle.ConstantTimeCompare(expected[:], presented[:]) == 1
-	manager.mu.RUnlock()
-	if !valid {
-		return ErrInvalidToken
+	if expected != [32]byte{} && subtle.ConstantTimeCompare(expected[:], presented[:]) == 1 {
+		return nil
 	}
-	return nil
+	return ErrInvalidToken
 }
 
 func (manager *Manager) NextChunk(id string) (uint64, error) {
@@ -237,16 +260,24 @@ func (manager *Manager) RecordBytesRelayed(count int) {
 func (manager *Manager) RecordQueueSaturation() { manager.queueSaturated.Add(1) }
 func (manager *Manager) RecordExpired()         { manager.expired.Add(1) }
 func (manager *Manager) Metrics() Metrics {
+	activeTransfers := 0
+	for index := range manager.shards {
+		shard := &manager.shards[index]
+		shard.mu.RLock()
+		activeTransfers += len(shard.sessions)
+		shard.mu.RUnlock()
+	}
 	manager.mu.RLock()
-	activeTransfers, activeConnections := len(manager.sessions), manager.connections
+	activeConnections := manager.connections
 	manager.mu.RUnlock()
 	return Metrics{ActiveTransfers: activeTransfers, ActiveConnections: activeConnections, CreatedTransfers: manager.created.Load(), CompletedTransfers: manager.completed.Load(), CancelledTransfers: manager.cancelled.Load(), ExpiredTransfers: manager.expired.Load(), FailedTransfers: manager.failed.Load(), BytesRelayed: manager.bytesRelayed.Load(), QueueSaturated: manager.queueSaturated.Load()}
 }
 
 func (manager *Manager) Get(id string) (*Session, bool) {
-	manager.mu.RLock()
-	session, ok := manager.sessions[id]
-	manager.mu.RUnlock()
+	shard := &manager.shards[manager.shardFor(id)]
+	shard.mu.RLock()
+	session, ok := shard.sessions[id]
+	shard.mu.RUnlock()
 	return session, ok
 }
 
@@ -463,25 +494,37 @@ func (manager *Manager) PrepareChunk(id string, index uint64, frame []byte) (rec
 }
 
 func (manager *Manager) Delete(id string) {
-	manager.mu.Lock()
-	session, ok := manager.sessions[id]
+	shard := &manager.shards[manager.shardFor(id)]
+	shard.mu.Lock()
+	session, ok := shard.sessions[id]
 	if ok {
-		delete(manager.sessions, id)
+		delete(shard.sessions, id)
 	}
-	manager.mu.Unlock()
+	shard.mu.Unlock()
 	if ok {
+		manager.mu.Lock()
+		if manager.transferCount > 0 {
+			manager.transferCount--
+		}
+		manager.mu.Unlock()
 		session.closeConnections()
 	}
 }
 
 func (manager *Manager) Shutdown() {
-	manager.mu.Lock()
-	sessions := make([]*Session, 0, len(manager.sessions))
-	for id, session := range manager.sessions {
-		delete(manager.sessions, id)
-		sessions = append(sessions, session)
+	var sessions []*Session
+	for index := range manager.shards {
+		shard := &manager.shards[index]
+		shard.mu.Lock()
+		for id, session := range shard.sessions {
+			delete(shard.sessions, id)
+			sessions = append(sessions, session)
+		}
+		shard.mu.Unlock()
 	}
+	manager.mu.Lock()
 	manager.connections = 0
+	manager.transferCount = 0
 	manager.mu.Unlock()
 	for _, session := range sessions {
 		session.closeConnections()
@@ -489,21 +532,32 @@ func (manager *Manager) Shutdown() {
 }
 
 func (manager *Manager) Cleanup(now time.Time) int {
-	manager.mu.RLock()
-	sessions := make([]*Session, 0, len(manager.sessions))
-	for _, session := range manager.sessions {
-		sessions = append(sessions, session)
-	}
-	manager.mu.RUnlock()
-
 	removed := 0
-	for _, session := range sessions {
-		if !session.Expire(now) {
-			continue
+	for index := range manager.shards {
+		shard := &manager.shards[index]
+		shard.mu.RLock()
+		snapshot := make([]*Session, 0, len(shard.sessions))
+		for _, session := range shard.sessions {
+			snapshot = append(snapshot, session)
 		}
-		manager.Delete(session.ID)
-		manager.RecordExpired()
-		removed++
+		shard.mu.RUnlock()
+		for _, session := range snapshot {
+			if !session.Expire(now) {
+				continue
+			}
+			shard.mu.Lock()
+			if current, ok := shard.sessions[session.ID]; ok && current == session {
+				delete(shard.sessions, session.ID)
+			}
+			shard.mu.Unlock()
+			manager.mu.Lock()
+			if manager.transferCount > 0 {
+				manager.transferCount--
+			}
+			manager.mu.Unlock()
+			manager.RecordExpired()
+			removed++
+		}
 	}
 	return removed
 }

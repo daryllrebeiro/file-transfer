@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -280,5 +281,31 @@ func TestCapabilityTokensAreRoleScopedAndNotInSnapshots(t *testing.T) {
 	snapshot := session.Snapshot()
 	if snapshot.SenderTokenHash != [32]byte{} || snapshot.ReceiverTokenHash != [32]byte{} {
 		t.Fatal("token hashes leaked into snapshot")
+	}
+}
+
+func TestManagerConcurrentChurnAcrossShards(t *testing.T) {
+	manager := NewManager(time.Minute, 100, 1024*1024)
+	manager.SetLimits(10000, 10000)
+	var wg sync.WaitGroup
+	for worker := 0; worker < 64; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for iteration := 0; iteration < 25; iteration++ {
+				session, err := manager.Create(Metadata{FileName: "a.txt", FileSize: 10, ChunkSize: 5})
+				if err != nil {
+					continue
+				}
+				_, _ = manager.Get(session.ID)
+				_ = manager.ValidateToken(session.ID, SenderRole, "bogus")
+				_, _ = manager.Cancel(session.ID)
+				manager.Delete(session.ID)
+			}
+		}()
+	}
+	wg.Wait()
+	if metrics := manager.Metrics(); metrics.ActiveTransfers != 0 {
+		t.Fatalf("expected all transfers reaped, got %d", metrics.ActiveTransfers)
 	}
 }
