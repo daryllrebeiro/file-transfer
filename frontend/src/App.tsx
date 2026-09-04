@@ -63,8 +63,11 @@ function Home() {
   };
   const [transportMode, setTransportMode] = useState<TransportMode>(getInitialTransport());
   const [history, setHistory] = useState<HistoryEntry[]>(() => getHistory());
+  const [sendMode, setSendMode] = useState<'file' | 'text'>('file');
+  const [text, setText] = useState('');
+  const textLimit = 64 * 1024;
 
-  const choose = (selected?: File) => { if (selected) setFile(selected); };
+  const choose = (selected?: File) => { if (selected) { setFile(selected); setSendMode('file'); } };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -78,20 +81,21 @@ function Home() {
     localStorage.setItem('relay:default_transport', mode);
   };
 
-  async function create() {
-    if (!file) return;
-    if (limits && file.size > limits.maxFileSize) {
+  async function create(chosen?: File) {
+    const target = chosen ?? file;
+    if (!target) return;
+    if (limits && target.size > limits.maxFileSize) {
       setError(`This file is larger than the configured ${bytes(limits.maxFileSize)} limit.`);
       return;
     }
     setBusy(true);
     setError('');
     try {
-      const sha256 = await hashFile(file, chunkSize);
+      const sha256 = await hashFile(target, chunkSize);
       const result = await createTransfer({
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: file.type || 'application/octet-stream',
+        fileName: target.name,
+        fileSize: target.size,
+        mimeType: target.type || 'application/octet-stream',
         chunkSize,
         sha256,
         transport: transportMode
@@ -100,18 +104,26 @@ function Home() {
         url: result.url,
         senderToken: result.senderToken,
         sha256,
-        fileName: file.name,
-        fileSize: file.size,
+        fileName: target.name,
+        fileSize: target.size,
         expiresAt: result.expiresAt,
         transport: transportMode
       }));
-      addHistory({ id: result.id, name: file.name, size: file.size, ts: Date.now(), outcome: 'created' });
+      addHistory({ id: result.id, name: target.name, size: target.size, ts: Date.now(), outcome: 'created' });
       setHistory(getHistory());
-      navigate(`/transfer/${result.id}`, { state: { file, url: result.url, senderToken: result.senderToken, sha256, expiresAt: result.expiresAt, transport: transportMode } });
+      navigate(`/transfer/${result.id}`, { state: { file: target, url: result.url, senderToken: result.senderToken, sha256, expiresAt: result.expiresAt, transport: transportMode } });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not create transfer.');
       setBusy(false);
     }
+  }
+
+  async function createText() {
+    const value = text.trim();
+    if (!value) return;
+    const textFile = new File([value], 'message.txt', { type: 'text/plain;charset=utf-8' });
+    setSendMode('file');
+    await create(textFile);
   }
 
   return (
@@ -120,9 +132,26 @@ function Home() {
         <p className="eyebrow">PRIVATE FILE RELAY</p>
         <h1>Send files without leaving a trail.</h1>
         <p className="lede">A fast, temporary bridge between your devices. Your file is streamed while you need it, then forgotten.</p>
-        
+
+        <div className="send-tabs" role="tablist" aria-label="What do you want to send?">
+          <button className={`send-tab ${sendMode === 'file' ? 'active' : ''}`} role="tab" aria-selected={sendMode === 'file'} onClick={() => setSendMode('file')}>File</button>
+          <button className={`send-tab ${sendMode === 'text' ? 'active' : ''}`} role="tab" aria-selected={sendMode === 'text'} onClick={() => setSendMode('text')}>Text</button>
+        </div>
+
         <div className="card dropzone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); choose(event.dataTransfer.files[0]); }}>
-          {file ? (
+          {sendMode === 'text' ? (
+            <>
+              <div className="file-icon">T</div>
+              <h2>Send text</h2>
+              <p className="muted">Up to 64 KB · arrives as message.txt</p>
+              <textarea className="text-input" value={text} onChange={event => setText(event.target.value.slice(0, textLimit))} rows={8} placeholder="Paste text or a link…" aria-label="Text to send" />
+              <p className="text-count">{bytes(text.length)} of {bytes(textLimit)}</p>
+              <div className="actions">
+                <button className="secondary" onClick={() => setSendMode('file')}>Send a file instead</button>
+                <button onClick={() => void createText()} disabled={busy || text.trim().length === 0}>{busy ? 'Hashing text…' : 'Create text link →'}</button>
+              </div>
+            </>
+          ) : file ? (
             <>
               <div className="file-icon">↗</div>
               <h2>{file.name}</h2>
@@ -195,7 +224,7 @@ function Home() {
 
               <div className="actions">
                 <button className="secondary" onClick={() => input.current?.click()}>Change file</button>
-                <button onClick={create} disabled={busy}>{busy ? 'Hashing file…' : 'Create transfer link →'}</button>
+                <button onClick={() => void create()} disabled={busy}>{busy ? 'Hashing file…' : 'Create transfer link →'}</button>
               </div>
             </>
           ) : (

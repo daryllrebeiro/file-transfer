@@ -458,6 +458,65 @@ html[data-theme='light'] .diagnostics-toggle:focus-visible {
 .theme-toggle:hover {
   border-color: #d4f25c;
 }
+.send-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  margin: 0 auto 14px;
+  background: rgba(27, 43, 39, 0.5);
+  border: 1px solid rgba(203, 239, 220, 0.12);
+  border-radius: 12px;
+}
+.send-tab {
+  font: 700 13px Manrope;
+  padding: 7px 18px;
+  background: transparent;
+  color: #a7b8b1;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.send-tab:hover {
+  color: #e9eef1;
+}
+.send-tab.active {
+  background: #d4f25c;
+  color: #142019;
+}
+.text-input {
+  width: 100%;
+  min-height: 150px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  font: 500 14px/1.5 Manrope, monospace;
+  color: inherit;
+  background: rgba(16, 25, 24, 0.55);
+  border: 1px solid #496059;
+  border-radius: 10px;
+  resize: vertical;
+}
+.text-input:focus-visible {
+  outline: 2px solid #d4f25c;
+  outline-offset: 1px;
+}
+.text-count {
+  margin: 8px 0 0;
+  font: 500 11px 'DM Mono', monospace;
+  color: #a7b8b1;
+}
+html[data-theme='light'] .send-tabs {
+  background: rgba(23, 35, 30, 0.06);
+  border-color: rgba(23, 35, 30, 0.12);
+}
+html[data-theme='light'] .send-tab {
+  color: #5c6b64;
+}
+html[data-theme='light'] .send-tab:hover {
+  color: #1c2a24;
+}
+html[data-theme='light'] .text-input {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: #9db0a8;
+}
 @media (max-width: 600px) {
   .theme-toggle {
     display: none;

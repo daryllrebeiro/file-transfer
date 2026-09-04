@@ -429,6 +429,30 @@ The current design is dark-first and excellent; add a light variant driven by `p
 
 **Effort**: 2 days. **Acceptance**: tagging `v1.1.0` produces a registry image, a GitHub release, and a staging deployment without manual steps.
 
+### E6. Free-Tier GCP Deployment Automation (mirror of `support-master`)
+
+**Goal**: a one-command, environment-driven deployment to Google Cloud Run on the **free tier** (`min-instances 0`, small CPU/memory, artifact-tagged immutable images) — the same developer-experience pattern used by the `support-master` repo (`scripts/deploy.ps1` + `deploy.sh` + `deploy-cloudrun.ps1` + `docs/gcp-deployment.md` + per-deploy benchmark reports).
+
+**Deliverables**:
+1. **`scripts/deploy.ps1` and `scripts/deploy.sh`** — numbered, benchmarked, idempotent, `$ErrorActionPreference="Stop"`/`set -e` guarded. Steps (mirroring the reference repo):
+   1. Env validation: `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_REGION`, optional `METRICS_TOKEN` (no hard secrets required otherwise).
+   2. Pre-flight: `gcloud` present + authenticated, git commit SHA captured (fallback `manual`).
+   3. `gcloud services enable` (run, cloudbuild, artifactregistry, secretmanager).
+   4. Artifact Registry repo `relay-backend` (create-if-missing).
+   5. Secret Manager container `relay-metrics-token`; payload injected out-of-band via `gcloud secrets versions add --data-file=-` — never in state or image. Secret optional (metrics disabled when absent).
+   6. GCS state bucket bootstrap only for the Terraform variant; the default simple path skips Terraform and uses direct `gcloud run deploy` (matching `deploy-cloudrun.ps1`).
+   7. `gcloud builds submit --tag {region}-docker.pkg.dev/{project}/relay-backend/relay-backend:{COMMIT_SHA}`.
+   8. IAM: grant the Cloud Run runtime SA `roles/secretmanager.secretAccessor` on the metrics secret.
+   9. `gcloud run deploy relay-backend` — free-tier friendly flags: `--min-instances 0 --max-instances 1` (relay is in-memory/single-instance by design), `--cpu 1 --memory 512Mi`, `--port 8080`, `--allow-unauthenticated` (public transfer links), env vars `PORT`, `PUBLIC_BASE_URL={service URL}`, `ALLOWED_ORIGINS={frontend origin}`, `TRANSFER_TTL`, limits, `TRUST_PROXY=true` (behind Cloud Run), `METRICS_FORMAT=prometheus`, `--set-secrets METRICS_TOKEN=relay-metrics-token:latest`.
+   10. **Live verification**: poll `${SERVICE_URL}/healthz` for HTTP 204 (up to ~60s warm-up), then `curl /metrics` with the token to prove secret injection.
+   11. Write a **`deploy-history/deploy_{timestamp}_{sha}.md`** report: per-step durations, service URL, image tag, verdict — mirroring the reference repo's benchmark report.
+2. **`docs/gcp-free-deployment.md`** — architecture diagram, one-time prerequisites, cost notes (Cloud Run free tier quotas, min-instances 0 cold-start implication for live links), and the session-affinity caveat (`maxScale` must stay 1).
+3. **Optional Terraform variant** (`infra/terraform/`, gated by `-UseTerraform`) for those who want declarative infra; default path stays script-only so a contributor needs just `gcloud`.
+
+**Files**: `scripts/deploy.ps1`, `scripts/deploy.sh`, `scripts/deploy-cloudrun.ps1`, `docs/gcp-free-deployment.md`, `infra/terraform/` (optional), `.gitignore` (`deploy-history/` optional to keep, actually **committed** as evidence per reference repo).
+
+**Effort**: 2 days. **Risks**: free-tier cold starts make an idle `min-instances 0` service slow on first hit after inactivity — documented; production traffic can set `--min-instances 1` at small cost. **Acceptance**: fresh project deploys with one exported env var + one script run, `healthz` returns 204, `/metrics` returns Prometheus text with the injected token, and a benchmark report is written to `deploy-history/`.
+
 ---
 
 ## Phased Roadmap
@@ -476,7 +500,7 @@ Sequencing logic: Track A first (cheap, de-risks everything), protocol work befo
 
 **Exit criteria**: password transfers verifiably opaque to the relay; multi-file E2E green; refresh-mid-transfer resumes byte-exact; a11y audit clean.
 
-### Phase 4 — Reach & Scale (Weeks 12–15) · ~19 dev-days
+### Phase 4 — Reach & Scale (Weeks 12–15) · ~21 dev-days
 | Item | Effort |
 |------|--------|
 | D4 i18n foundation | 3d |
@@ -486,6 +510,7 @@ Sequencing logic: Track A first (cheap, de-risks everything), protocol work befo
 | E4 Supply-chain hygiene | 1.5d |
 | E5 Release engineering | 2d |
 | E3 Phase 2 Redis (go/no-go gate) | 8d |
+| E6 Free-tier GCP deployment automation | 2d |
 | E2 Load harness completion + runbook | 2d |
 
 **Exit criteria**: installable PWA with share-sheet entry; paired devices transfer without links; release pipeline one-tag automated; scale decision made on data.
@@ -500,8 +525,8 @@ Sequencing logic: Track A first (cheap, de-risks everything), protocol work befo
 | B — Protocol & perf | 6 | ~14 dev-days |
 | C — Major features | 5 | ~27.5 dev-days |
 | D — UX polish | 7 | ~13 dev-days |
-| E — Scale & ops | 5 | ~16 dev-days |
-| **Total** | **32** | **~80 dev-days** (≈ 16 weeks for one developer, with the phase overlaps above compressing calendar time to ~15 weeks) |
+| E — Scale & ops | 6 | ~18 dev-days |
+| **Total** | **33** | **~82 dev-days** (≈ 16 weeks for one developer, with the phase overlaps above compressing calendar time to ~15 weeks) |
 
 A two-person team (one backend-leaning, one frontend-leaning) compresses this to roughly 8–9 calendar weeks, since C1/C2/C3 split cleanly along that seam.
 
