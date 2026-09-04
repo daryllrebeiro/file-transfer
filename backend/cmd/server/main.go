@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,8 +20,10 @@ import (
 
 func main() {
 	settings := config.Load()
+	slog.SetDefault(newLogger(settings.LogFormat, settings.LogLevel))
 	if err := validateSettings(settings); err != nil {
-		log.Fatal(err)
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
 	}
 	manager := transfer.NewManager(settings.TransferTTL, settings.MaxFileSize, settings.MaxChunkSize)
 	manager.SetLimits(settings.MaxActiveTransfers, settings.MaxConnections)
@@ -35,20 +38,42 @@ func main() {
 	}
 	mux.Handle("/ws/", httpapi.SecurityHeaders(transferws.NewHandler(manager, allowed)))
 	server := &http.Server{Addr: "0.0.0.0:" + settings.Port, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: settings.WriteTimeout, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 32 << 10}
-	log.Printf("file transfer server listening on %s", server.Addr)
+	slog.Info("server listening", "addr", server.Addr)
 	stop, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignal()
 	go cleanup(stop, manager)
 	go func() {
 		<-stop.Done()
+		slog.Info("shutting down: draining connections")
 		manager.Shutdown()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownContext)
+		slog.Info("shutdown complete")
 	}()
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		slog.Error("server failed", "error", err)
+		os.Exit(1)
 	}
+}
+
+func newLogger(format, level string) *slog.Logger {
+	options := &slog.HandlerOptions{Level: slog.LevelInfo}
+	switch strings.ToLower(level) {
+	case "debug":
+		options.Level = slog.LevelDebug
+	case "warn":
+		options.Level = slog.LevelWarn
+	case "error":
+		options.Level = slog.LevelError
+	}
+	var handler slog.Handler
+	if strings.ToLower(format) == "json" {
+		handler = slog.NewJSONHandler(os.Stderr, options)
+	} else {
+		handler = slog.NewTextHandler(os.Stderr, options)
+	}
+	return slog.New(handler)
 }
 func validateSettings(settings config.Config) error {
 	parsed, err := url.Parse(settings.PublicBaseURL)

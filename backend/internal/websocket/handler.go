@@ -1,8 +1,11 @@
 package websocket
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -11,6 +14,14 @@ import (
 	"file-transfer/backend/internal/transfer"
 	ws "github.com/gorilla/websocket"
 )
+
+func newConnID() string {
+	raw := make([]byte, 4)
+	if _, err := rand.Read(raw); err != nil {
+		return "unknown"
+	}
+	return hex.EncodeToString(raw)
+}
 
 const (
 	writeWait      = 10 * time.Second
@@ -153,19 +164,25 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	connection.SetReadLimit(maxMessageSize)
 	peer := newPeer(connection)
 	peer.Start()
-	role, err := handler.join(peer, id)
+	connID := newConnID()
+	role, err := handler.join(peer, id, connID)
 	if err != nil {
+		slog.Warn("websocket join rejected", "connId", connID, "transferId", id, "error", err)
 		_ = peer.SendControl(controlBytes(control{Type: "error", Message: friendlyError(err)}))
 		_ = peer.Close()
 		return
 	}
-	defer func() { _ = peer.Close(); handler.detach(id, role, peer) }()
+	defer func() {
+		_ = peer.Close()
+		handler.detach(id, role, peer)
+		slog.Info("websocket closed", "connId", connID, "transferId", id, "role", role)
+	}()
 	connection.SetReadDeadline(time.Now().Add(pongWait))
 	connection.SetPongHandler(func(string) error { return connection.SetReadDeadline(time.Now().Add(pongWait)) })
 	handler.loop(connection, id, role)
 }
 
-func (handler *Handler) join(peer *peer, id string) (transfer.Role, error) {
+func (handler *Handler) join(peer *peer, id string, connID string) (transfer.Role, error) {
 	var message control
 	if err := peer.connection.ReadJSON(&message); err != nil {
 		return "", err
@@ -173,6 +190,7 @@ func (handler *Handler) join(peer *peer, id string) (transfer.Role, error) {
 	if message.TransferID != "" && message.TransferID != id {
 		return "", errors.New("transfer ID does not match connection")
 	}
+	slog.Info("websocket joined", "connId", connID, "transferId", id, "type", message.Type)
 	var session *transfer.Session
 	var err error
 	var role transfer.Role
@@ -257,6 +275,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if err != nil {
 			return
 		}
+		slog.Info("transfer accepted", "transferId", id)
 		sender, _, ok := handler.Manager.Connections(id)
 		if ok && sender != nil {
 			_ = sender.SendControl(controlBytes(control{Type: "transfer_accepted", Metadata: session.Snapshot().Metadata}))
@@ -269,6 +288,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 			return
 		}
 		handler.Manager.RecordCompleted()
+		slog.Info("transfer completed", "transferId", id)
 		_, receiver, ok := handler.Manager.Connections(id)
 		if ok && receiver != nil {
 			_ = receiver.SendControl(controlBytes(control{Type: "transfer_complete"}))
@@ -278,6 +298,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 			return
 		}
 		handler.Manager.RecordCancelled()
+		slog.Info("transfer cancelled", "transferId", id, "source", message.Type)
 		sender, receiver, ok := handler.Manager.Connections(id)
 		if !ok {
 			return
