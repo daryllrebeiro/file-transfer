@@ -385,14 +385,17 @@ function Sender() {
       const f = file;
       if (!f) return;
       try {
-        const totalChunks = Math.ceil(f.size / chunkSize);
-        logger.debug('[Sender] Total chunks:', totalChunks);
-        for (let i = startChunk.current; i < totalChunks; i++) {
+        const baseSize = chunkSize;
+        let offset = startChunk.current * baseSize;
+        let index = startChunk.current;
+        while (offset < f.size) {
           if (controller.signal.aborted) break;
-          const chunk = await f.slice(i * chunkSize, Math.min(f.size, (i + 1) * chunkSize)).arrayBuffer();
-          logger.debug('[Sender] Sending chunk:', i);
-          await t.sendChunk(chunk, i);
-          logger.debug('[Sender] Chunk sent:', i);
+          const size = Math.min(t.getChunkSize?.() ?? baseSize, f.size - offset);
+          logger.debug('[Sender] Sending chunk:', index, 'size:', size);
+          const chunk = await f.slice(offset, offset + size).arrayBuffer();
+          await t.sendChunk(chunk, index);
+          offset += chunk.byteLength;
+          index++;
         }
         if (!controller.signal.aborted) {
           logger.debug('[Sender] Calling t.complete()');

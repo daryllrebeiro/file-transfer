@@ -183,6 +183,10 @@ export class AutoTransport implements TransferTransport {
     return this.activeTransport?.getStartChunk?.() || 0;
   }
 
+  getChunkSize(): number | undefined {
+    return this.activeTransport?.getChunkSize?.();
+  }
+
   onMetadata(callback: (metadata: Metadata) => void): void {
     this.metadataCallback = callback;
     this.activeTransport?.onMetadata?.(callback);

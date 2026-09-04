@@ -170,6 +170,38 @@ func TestManagerEnforcesActiveTransferAndConnectionLimits(t *testing.T) {
 	}
 }
 
+func TestManagerAdjustChunkSizeClampsAndRequiresTransferring(t *testing.T) {
+	manager := NewManager(time.Minute, 100, 1024*1024)
+	session, err := manager.Create(Metadata{FileName: "a.txt", FileSize: 10, ChunkSize: 1024 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AdjustChunkSize(session.ID, 6); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("expected rejection before transferring, got %v", err)
+	}
+	if _, err := manager.AttachSender(session.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AttachReceiver(session.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Accept(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AdjustChunkSize(session.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := session.Snapshot().Metadata.ChunkSize; got != MinChunkSize {
+		t.Fatalf("expected clamp to MinChunkSize, got %d", got)
+	}
+	if err := manager.AdjustChunkSize(session.ID, manager.maxChunkSize+100); err != nil {
+		t.Fatal(err)
+	}
+	if got := session.Snapshot().Metadata.ChunkSize; got != manager.maxChunkSize {
+		t.Fatalf("expected clamp to maxChunkSize, got %d", got)
+	}
+}
+
 func TestManagerRejectsUnsafeMetadata(t *testing.T) {
 	manager := NewManager(time.Minute, 100, 10)
 	invalid := []Metadata{{FileName: "../secret", FileSize: 10}, {FileName: "file", FileSize: 10, SHA256: "not-a-hash"}}

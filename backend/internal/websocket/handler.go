@@ -48,6 +48,7 @@ type control struct {
 	TransferID    string            `json:"transferId,omitempty"`
 	Metadata      transfer.Metadata `json:"metadata,omitempty"`
 	ChunkIndex    uint64            `json:"chunkIndex"`
+	ChunkSize     int               `json:"chunkSize"`
 	Message       string            `json:"message,omitempty"`
 	Token         string            `json:"token,omitempty"`
 	NextChunk     uint64            `json:"nextChunk"`
@@ -296,6 +297,13 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		}
 		if receiver != nil {
 			_ = receiver.Close()
+		}
+	case "chunk_size_change":
+		if role != transfer.SenderRole {
+			return
+		}
+		if err := handler.Manager.AdjustChunkSize(id, message.ChunkSize); err != nil {
+			return
 		}
 	case "webrtc_offer":
 		if role != transfer.SenderRole {

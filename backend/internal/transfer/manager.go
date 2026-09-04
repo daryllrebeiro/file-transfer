@@ -19,6 +19,9 @@ const (
 	ReceiverRole Role = "receiver"
 )
 
+// MinChunkSize is the floor for adaptive relay chunk sizing.
+const MinChunkSize = 256 * 1024
+
 var (
 	ErrTransferNotFound = errors.New("transfer not found")
 	ErrTransferExpired  = errors.New("transfer expired")
@@ -364,6 +367,27 @@ func (manager *Manager) Extend(id string, now time.Time) (time.Time, error) {
 	}
 	session.ExpiresAt = next
 	return session.ExpiresAt, nil
+}
+
+func (manager *Manager) AdjustChunkSize(id string, requested int) error {
+	session, err := manager.getActive(id)
+	if err != nil {
+		return err
+	}
+	session.Mu.Lock()
+	defer session.Mu.Unlock()
+	if session.State != Transferring {
+		return ErrInvalidState
+	}
+	size := requested
+	if size < MinChunkSize {
+		size = MinChunkSize
+	}
+	if size > manager.maxChunkSize {
+		size = manager.maxChunkSize
+	}
+	session.Metadata.ChunkSize = size
+	return nil
 }
 
 func (manager *Manager) Detach(id string, role Role, connection Peer) (*Session, bool) {

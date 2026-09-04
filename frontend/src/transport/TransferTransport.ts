@@ -30,6 +30,7 @@ export interface TransferTransport {
   getStatus(): TransportStatus;
   getActiveTransport(): TransportMode;
   getStartChunk?(): number;
+  getChunkSize?(): number | undefined;
   accept?(): void;
   complete?(): Promise<void>;
 }

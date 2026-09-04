@@ -3,6 +3,12 @@ import { Metadata, Message } from '../types';
 import { TransferClient, parseChunk, frameChunk } from '../services/transferClient';
 import { logger } from '../services/logger';
 
+const defaultChunkSize = 2 * 1024 * 1024;
+const ADAPTIVE_MIN_CHUNK = 256 * 1024;
+const ADAPTIVE_GROWTH_AFTER_ACKS = 4;
+const ADAPTIVE_GROW = 1.25;
+const ADAPTIVE_SHRINK = 0.5;
+
 export class WebSocketRelayTransport implements TransferTransport {
   private role: 'sender' | 'receiver';
   private url: string;
@@ -29,6 +35,11 @@ export class WebSocketRelayTransport implements TransferTransport {
   private maxAttempts = 3;
   private frames = new Map<number, ArrayBuffer>();
   private timeouts = new Map<number, number>();
+  private sentTimes = new Map<number, number>();
+  private bytesSent = 0;
+  private currentChunkSize: number;
+  private maxChunkSize: number;
+  private acksSinceResize = 0;
 
   constructor(role: 'sender' | 'receiver', url: string, id: string, token: string, file?: File, metadata?: Metadata, client?: TransferClient) {
     this.role = role;
@@ -38,6 +49,39 @@ export class WebSocketRelayTransport implements TransferTransport {
     this.file = file;
     this.metadata = metadata;
     this.client = client;
+    this.currentChunkSize = metadata?.chunkSize || defaultChunkSize;
+    this.maxChunkSize = this.currentChunkSize;
+  }
+
+  private announceSize(target: number) {
+    this.currentChunkSize = target;
+    this.acksSinceResize = 0;
+    if (this.client && this.client.socket.readyState === WebSocket.OPEN) {
+      this.client.socket.send(JSON.stringify({ type: 'chunk_size_change', chunkSize: this.currentChunkSize }));
+      logger.debug(`[WebSocketRelayTransport] Adaptive chunk size -> ${this.currentChunkSize}`);
+    }
+  }
+
+  private adjustSize(next: number) {
+    const clamped = Math.max(ADAPTIVE_MIN_CHUNK, Math.min(Math.round(next), this.maxChunkSize));
+    if (clamped === this.currentChunkSize) {
+      this.acksSinceResize = 0;
+      return;
+    }
+    this.announceSize(clamped);
+  }
+
+  private onChunkAcknowledged(index: number) {
+    this.acksSinceResize++;
+    if (this.acksSinceResize >= ADAPTIVE_GROWTH_AFTER_ACKS && this.currentChunkSize < this.maxChunkSize) {
+      this.adjustSize(this.currentChunkSize * ADAPTIVE_GROW);
+    }
+  }
+
+  private onChunkRetry() {
+    if (this.currentChunkSize > ADAPTIVE_MIN_CHUNK) {
+      this.adjustSize(this.currentChunkSize * ADAPTIVE_SHRINK);
+    }
   }
 
   async connect(): Promise<void> {
@@ -82,12 +126,14 @@ export class WebSocketRelayTransport implements TransferTransport {
       if (pending) {
         window.clearTimeout(this.timeouts.get(idx));
         this.timeouts.delete(idx);
+        this.sentTimes.delete(idx);
         pending.resolve();
         this.pendingAcks.delete(idx);
         this.frames.delete(idx);
         if (idx === this.acknowledged) {
           this.acknowledged = idx + 1;
         }
+        this.onChunkAcknowledged(idx);
       }
     } else if (msg.type === 'sender_disconnected' || msg.type === 'receiver_disconnected') {
       this.handleError('The other device disconnected.');
@@ -130,6 +176,7 @@ export class WebSocketRelayTransport implements TransferTransport {
 
     const frame = frameChunk(index, chunk);
     this.frames.set(index, frame);
+    this.sentTimes.set(index, performance.now());
     this.client.socket.send(frame);
 
     const ackPromise = new Promise<void>((resolve, reject) => {
@@ -138,27 +185,9 @@ export class WebSocketRelayTransport implements TransferTransport {
 
     this.setupTimeout(index);
 
+    this.bytesSent += chunk.byteLength;
     if (this.progressCallback && this.file) {
-      this.progressCallback({ bytesSent: (index + 1) * chunk.byteLength, totalBytes: this.file.size });
-    }
-
-    // If this is the last chunk, wait for all pending ACKs to clear, then send transfer_complete
-    const totalChunks = this.file ? Math.ceil(this.file.size / this.metadata!.chunkSize) : 1;
-    if (index === totalChunks - 1) {
-      await new Promise<void>((resolve, reject) => {
-        const checkDone = () => {
-          if (this.pendingAcks.size === 0) {
-            resolve();
-          } else if (this.status === 'failed' || this.status === 'closed') {
-            reject(new Error('Transport failed before completion'));
-          } else {
-            window.setTimeout(checkDone, 50);
-          }
-        };
-        checkDone();
-      });
-      this.client.send({ type: 'transfer_complete' });
-      this.updateStatus('completed');
+      this.progressCallback({ bytesSent: Math.min(this.bytesSent, this.file.size), totalBytes: this.file.size });
     }
   }
 
@@ -174,6 +203,7 @@ export class WebSocketRelayTransport implements TransferTransport {
           } else {
             attempt++;
             logger.warn(`[WebSocketRelayTransport] Resending chunk ${index}, attempt ${attempt}`);
+            this.onChunkRetry();
             const frame = this.frames.get(index);
             if (frame && this.client && this.client.socket.readyState === WebSocket.OPEN) {
               this.client.socket.send(frame);
@@ -223,6 +253,7 @@ export class WebSocketRelayTransport implements TransferTransport {
     }
     this.pendingAcks.clear();
     this.frames.clear();
+    this.sentTimes.clear();
   }
 
   getStatus(): TransportStatus {
@@ -237,11 +268,27 @@ export class WebSocketRelayTransport implements TransferTransport {
     return this.startChunk;
   }
 
+  getChunkSize(): number {
+    return this.currentChunkSize;
+  }
+
   accept(): void {
     this.client?.send({ type: 'accept_transfer' });
   }
 
   async complete(): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const checkDone = () => {
+        if (this.pendingAcks.size === 0) {
+          resolve();
+        } else if (this.status === 'failed' || this.status === 'closed') {
+          reject(new Error('Transport failed before completion'));
+        } else {
+          window.setTimeout(checkDone, 50);
+        }
+      };
+      checkDone();
+    });
     this.client?.send({ type: 'transfer_complete' });
     this.updateStatus('completed');
   }
