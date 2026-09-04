@@ -73,7 +73,7 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("/metrics", server.metrics)
 	mux.HandleFunc("/api/transfers", server.create)
 	mux.HandleFunc("/api/limits", server.limits)
-	mux.HandleFunc("/api/transfers/", server.get)
+	mux.HandleFunc("/api/transfers/", server.transferRoutes)
 	return mux
 }
 func (server *Server) metrics(w http.ResponseWriter, request *http.Request) {
@@ -146,6 +146,74 @@ func (server *Server) limits(w http.ResponseWriter, request *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, server.Manager.Limits())
 }
+func (server *Server) transferRoutes(w http.ResponseWriter, request *http.Request) {
+	path := strings.TrimPrefix(request.URL.Path, "/api/transfers/")
+	if strings.HasSuffix(path, "/extend") {
+		if request.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimSuffix(path, "/extend")
+		if id == "" || strings.Contains(id, "/") {
+			http.Error(w, "transfer not found", http.StatusNotFound)
+			return
+		}
+		server.extend(w, request, id)
+		return
+	}
+	if request.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	server.get(w, request)
+}
+
+func (server *Server) extend(w http.ResponseWriter, request *http.Request, id string) {
+	token := request.Header.Get("X-Sender-Token")
+	if token == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err := server.Manager.ValidateToken(id, transfer.SenderRole, token); err != nil {
+		switch {
+		case errors.Is(err, transfer.ErrTransferNotFound):
+			http.Error(w, "transfer not found", http.StatusNotFound)
+		case errors.Is(err, transfer.ErrInvalidToken), errors.Is(err, transfer.ErrInvalidRole):
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		default:
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		}
+		return
+	}
+	rateLimit := server.CreateLimiter.Check(server.clientIP(request), time.Now())
+	if rateLimit.Limit > 0 {
+		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(rateLimit.Limit))
+		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(rateLimit.Remaining))
+	}
+	if !rateLimit.Allowed {
+		retryAfter := int(rateLimit.RetryAfter / time.Second)
+		if retryAfter < 1 {
+			retryAfter = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+	expiresAt, err := server.Manager.Extend(id, time.Now())
+	if err != nil {
+		switch {
+		case errors.Is(err, transfer.ErrTransferNotFound):
+			http.Error(w, "transfer not found", http.StatusNotFound)
+		case errors.Is(err, transfer.ErrTransferExpired):
+			http.Error(w, "transfer expired", http.StatusGone)
+		default:
+			http.Error(w, "transfer is no longer active", http.StatusConflict)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"expiresAt": expiresAt})
+}
+
 func (server *Server) clientIP(request *http.Request) string {
 	if server.TrustProxy {
 		if forwarded := request.Header.Get("X-Forwarded-For"); forwarded != "" {

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -104,4 +105,77 @@ func TestLimitsEndpointReturnsManagerLimits(t *testing.T) {
 	if limits.MaxFileSize != 123 || limits.MaxChunkSize != 17 {
 		t.Fatalf("unexpected limits: %+v", limits)
 	}
+}
+
+func TestExtendRequiresSenderToken(t *testing.T) {
+	manager := transfer.NewManager(time.Minute, 100, 10)
+	server := &Server{Manager: manager, CreateLimiter: NewCreationLimiter(10)}
+	session, _, err := manager.CreateWithTokens(transfer.Metadata{FileName: "a.txt", FileSize: 10, ChunkSize: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/transfers/"+session.ID+"/extend", nil)
+	request.RemoteAddr = "192.0.2.10:1234"
+	response := httptest.NewRecorder()
+	server.transferRoutes(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", response.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/transfers/"+session.ID+"/extend", nil)
+	request.Header.Set("X-Sender-Token", "wrong")
+	request.RemoteAddr = "192.0.2.10:1234"
+	response = httptest.NewRecorder()
+	server.transferRoutes(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for bad token, got %d", response.Code)
+	}
+}
+
+func TestExtendAdvancesExpiryAndCapsAtTwoTTLs(t *testing.T) {
+	manager := transfer.NewManager(time.Minute, 100, 10)
+	server := &Server{Manager: manager, CreateLimiter: NewCreationLimiter(10)}
+	session, tokens, err := manager.CreateWithTokens(transfer.Metadata{FileName: "a.txt", FileSize: 10, ChunkSize: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := session.Snapshot().ExpiresAt
+
+	request := httptest.NewRequest(http.MethodPost, "/api/transfers/"+session.ID+"/extend", nil)
+	request.Header.Set("X-Sender-Token", tokens.SenderToken)
+	request.RemoteAddr = "192.0.2.10:1234"
+	response := httptest.NewRecorder()
+	server.transferRoutes(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", response.Code)
+	}
+	var body struct {
+		ExpiresAt time.Time `json:"expiresAt"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.ExpiresAt.After(original) {
+		t.Fatal("expected expiry to advance after extend")
+	}
+
+	cap := session.Snapshot().CreatedAt.Add(2 * time.Minute)
+	if body.ExpiresAt.After(cap) {
+		t.Fatalf("expiry %v exceeded cap %v", body.ExpiresAt, cap)
+	}
+}
+
+func TestManagerExtendRejectsTerminalState(t *testing.T) {
+	manager := transfer.NewManager(time.Minute, 100, 10)
+	session, tokens, err := manager.CreateWithTokens(transfer.Metadata{FileName: "a.txt", FileSize: 10, ChunkSize: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Cancel(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Extend(session.ID, time.Now()); !errors.Is(err, transfer.ErrInvalidState) {
+		t.Fatalf("expected terminal rejection, got %v", err)
+	}
+	_ = tokens
 }

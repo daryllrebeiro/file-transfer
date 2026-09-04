@@ -344,6 +344,28 @@ func (manager *Manager) Cancel(id string) (*Session, error) {
 	return session, nil
 }
 
+func (manager *Manager) Extend(id string, now time.Time) (time.Time, error) {
+	session, ok := manager.Get(id)
+	if !ok {
+		return time.Time{}, ErrTransferNotFound
+	}
+	if session.Expire(now) {
+		return time.Time{}, ErrTransferExpired
+	}
+	session.Mu.Lock()
+	defer session.Mu.Unlock()
+	if IsTerminal(session.State) {
+		return time.Time{}, ErrInvalidState
+	}
+	capTime := session.CreatedAt.Add(2 * manager.ttl)
+	next := session.ExpiresAt.Add(manager.ttl)
+	if next.After(capTime) {
+		next = capTime
+	}
+	session.ExpiresAt = next
+	return session.ExpiresAt, nil
+}
+
 func (manager *Manager) Detach(id string, role Role, connection Peer) (*Session, bool) {
 	session, ok := manager.Get(id)
 	if !ok {

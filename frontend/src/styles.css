@@ -161,4 +161,83 @@
 .diagnostics-val {
   color: #e9eef1;
   word-break: break-all;
+}
+.expiry {
+  margin: 10px 0 0;
+  font: 500 12px 'DM Mono', monospace;
+  color: #a7b8b1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.expiry.urgent {
+  color: #ff9b87;
+}
+.link-extend {
+  font: 700 12px Manrope;
+  padding: 4px 10px;
+  border-radius: 7px;
+  background: transparent;
+  color: #ff9b87;
+  border: 1px solid rgba(255, 155, 135, 0.5);
+  cursor: pointer;
+}
+.link-extend:hover {
+  background: rgba(255, 155, 135, 0.12);
+}
+.link-extend:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* --- Accessibility --- */
+.transport-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+.transport-option {
+  cursor: pointer;
+}
+.transport-name,
+.transport-desc {
+  display: block;
+}
+.privacy,
+.muted,
+.transport-desc,
+.diagnostics-key {
+  color: #a7b8b1;
+}
+a:focus-visible,
+button:focus-visible,
+.dropzone:focus-visible,
+.transport-option:focus-within,
+.button:focus-visible,
+.brand:focus-visible {
+  outline: 2px solid #d4f25c;
+  outline-offset: 2px;
+}
+.diagnostics-toggle:focus-visible {
+  outline: 2px solid #d4f25c;
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .dropzone:hover {
+    transform: none;
+  }
 }

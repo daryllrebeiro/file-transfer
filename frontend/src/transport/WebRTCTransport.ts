@@ -1,6 +1,7 @@
 import { TransferTransport, ReceivedChunk, TransferProgress, TransferError, TransportStatus, TransportMode } from './TransferTransport';
 import { Metadata, Message } from '../types';
 import { TransferClient } from '../services/transferClient';
+import { logger } from '../services/logger';
 
 const SUB_CHUNK_SIZE = 60 * 1024; // 60KB sub-chunks to stay well within browser SCTP limits
 
@@ -69,7 +70,7 @@ export class WebRTCTransport implements TransferTransport {
       try {
         iceServers = JSON.parse(configuredServers);
       } catch (e) {
-        console.error('Failed to parse VITE_WEBRTC_ICE_SERVERS, using fallback:', e);
+        logger.warn('Failed to parse VITE_WEBRTC_ICE_SERVERS, using fallback:', e);
       }
     }
 
@@ -77,14 +78,14 @@ export class WebRTCTransport implements TransferTransport {
 
     // Setup ice state diagnostics
     this.pc.oniceconnectionstatechange = () => {
-      console.log(`[WebRTCTransport] ICE connection state: ${this.pc?.iceConnectionState}`);
+      logger.debug(`[WebRTCTransport] ICE connection state: ${this.pc?.iceConnectionState}`);
       if (this.pc?.iceConnectionState === 'failed' || this.pc?.iceConnectionState === 'closed') {
         this.handleError(`ICE connection ${this.pc.iceConnectionState}`);
       }
     };
 
     this.pc.onconnectionstatechange = () => {
-      console.log(`[WebRTCTransport] Connection state: ${this.pc?.connectionState}`);
+      logger.debug(`[WebRTCTransport] Connection state: ${this.pc?.connectionState}`);
       if (this.pc?.connectionState === 'connected') {
         this.isConnected = true;
         // Inform backend for active transport tracking
@@ -108,7 +109,7 @@ export class WebRTCTransport implements TransferTransport {
 
     // Listen to signaling messages
     this.unsubscribeSignaling = this.signaling.onMessage(msg => {
-      console.log(`[WebRTCTransport] [${this.role}] Received signaling:`, msg.type);
+      logger.debug(`[WebRTCTransport] [${this.role}] Received signaling:`, msg.type);
       return this.handleSignaling(msg);
     });
 
@@ -127,7 +128,7 @@ export class WebRTCTransport implements TransferTransport {
   private async createOffer() {
     if (!this.pc) return;
     try {
-      console.log('[WebRTCTransport] Creating WebRTC offer...');
+      logger.debug('[WebRTCTransport] Creating WebRTC offer...');
       const offer = await this.pc.createOffer();
       await this.pc.setLocalDescription(offer);
       this.signaling.send({ type: 'webrtc_offer', sdp: offer.sdp });
@@ -141,17 +142,17 @@ export class WebRTCTransport implements TransferTransport {
     this.dataChannel.binaryType = 'arraybuffer';
 
     this.dataChannel.onopen = () => {
-      console.log('[WebRTCTransport] DataChannel open');
+      logger.debug('[WebRTCTransport] DataChannel open');
       this.updateStatus('connected');
     };
 
     this.dataChannel.onclose = () => {
-      console.log('[WebRTCTransport] DataChannel closed');
+      logger.debug('[WebRTCTransport] DataChannel closed');
       this.updateStatus('closed');
     };
 
     this.dataChannel.onerror = error => {
-      console.error('[WebRTCTransport] DataChannel error:', error);
+      logger.error('[WebRTCTransport] DataChannel error:', error);
       this.handleError('Data channel error');
     };
 
@@ -161,7 +162,7 @@ export class WebRTCTransport implements TransferTransport {
           const sub = decodeSubChunk(event.data as ArrayBuffer);
           if (sub.totalSubChunks === 0) {
             if (sub.subIndex === 1) {
-              console.log('[WebRTCTransport] [receiver] Received transfer_complete control frame over DataChannel');
+              logger.debug('[WebRTCTransport] [receiver] Received transfer_complete control frame over DataChannel');
               this.updateStatus('completed');
             }
             return;
@@ -190,7 +191,7 @@ export class WebRTCTransport implements TransferTransport {
             }
           }
         } catch (e) {
-          console.error('[WebRTCTransport] Error decoding WebRTC subchunk:', e);
+          logger.error('[WebRTCTransport] Error decoding WebRTC subchunk:', e);
           this.handleError('Failed to parse WebRTC binary frame');
         }
       };
@@ -214,7 +215,7 @@ export class WebRTCTransport implements TransferTransport {
     } else if (msg.type === 'webrtc_fallback') {
       this.handleError('Fallback requested by remote peer.');
     } else if (msg.type === 'transfer_complete') {
-      console.log('[WebRTCTransport] Ignoring signaling transfer_complete; awaiting DataChannel control frame');
+      logger.debug('[WebRTCTransport] Ignoring signaling transfer_complete; awaiting DataChannel control frame');
     } else if (msg.type === 'transfer_cancelled' || msg.type === 'error') {
       this.handleError(msg.message || 'Remote side cancelled/errored.');
     } else if (msg.type === 'transfer_offer') {
@@ -340,9 +341,9 @@ export class WebRTCTransport implements TransferTransport {
   }
 
   async complete(): Promise<void> {
-    console.log('[WebRTCTransport] complete() called');
+    logger.debug('[WebRTCTransport] complete() called');
     if (this.dataChannel && this.dataChannel.readyState === 'open') {
-      console.log('[WebRTCTransport] Sending transfer_complete over DataChannel...');
+      logger.debug('[WebRTCTransport] Sending transfer_complete over DataChannel...');
       const controlFrame = encodeSubChunk(0, 1, 0, new ArrayBuffer(0));
       this.dataChannel.send(controlFrame);
     }

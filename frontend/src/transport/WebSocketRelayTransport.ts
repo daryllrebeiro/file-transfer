@@ -1,6 +1,7 @@
 import { TransferTransport, ReceivedChunk, TransferProgress, TransferError, TransportStatus, TransportMode } from './TransferTransport';
 import { Metadata, Message } from '../types';
 import { TransferClient, parseChunk, frameChunk } from '../services/transferClient';
+import { logger } from '../services/logger';
 
 export class WebSocketRelayTransport implements TransferTransport {
   private role: 'sender' | 'receiver';
@@ -172,7 +173,7 @@ export class WebSocketRelayTransport implements TransferTransport {
             this.handleError(`Timed out waiting for chunk ${index}`);
           } else {
             attempt++;
-            console.log(`[WebSocketRelayTransport] Resending chunk ${index}, attempt ${attempt}`);
+            logger.warn(`[WebSocketRelayTransport] Resending chunk ${index}, attempt ${attempt}`);
             const frame = this.frames.get(index);
             if (frame && this.client && this.client.socket.readyState === WebSocket.OPEN) {
               this.client.socket.send(frame);

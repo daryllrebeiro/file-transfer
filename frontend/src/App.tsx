@@ -1,7 +1,7 @@
 import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Link, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
-import { createTransfer, getTransferLimits, socketURL, type TransferLimits } from './services/api';
+import { createTransfer, extendTransfer, getTransferLimits, socketURL, type TransferLimits } from './services/api';
 import { createHash, digestHex, hashFile } from './services/integrity';
 import { createReceiverSink, type ReceiverSink } from './services/receiverStorage';
 import type { Metadata } from './types';
@@ -83,9 +83,10 @@ function Home() {
         sha256,
         fileName: file.name,
         fileSize: file.size,
+        expiresAt: result.expiresAt,
         transport: transportMode
       }));
-      navigate(`/transfer/${result.id}`, { state: { file, url: result.url, senderToken: result.senderToken, sha256, transport: transportMode } });
+      navigate(`/transfer/${result.id}`, { state: { file, url: result.url, senderToken: result.senderToken, sha256, expiresAt: result.expiresAt, transport: transportMode } });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not create transfer.');
       setBusy(false);
@@ -108,39 +109,39 @@ function Home() {
               
               <div className="transport-selector">
                 <p className="transport-selector-title">TRANSFER METHOD</p>
-                <div className="transport-options">
-                  <div 
+                <div className="transport-options" role="radiogroup" aria-label="Transfer method">
+                  <label
                     className={`transport-option ${transportMode === 'auto' ? 'selected' : ''} ${!supportsWebRTC ? 'disabled' : ''}`}
-                    onClick={() => handleSelectTransport('auto')}
                   >
-                    <div className="transport-radio" />
-                    <div className="transport-info">
-                      <p className="transport-name">✨ Automatic</p>
-                      <p className="transport-desc">Try peer-to-peer first, then use relay</p>
-                    </div>
-                  </div>
+                    <input type="radio" name="transport" value="auto" disabled={!supportsWebRTC} checked={transportMode === 'auto'} onChange={() => handleSelectTransport('auto')} />
+                    <span className="transport-radio" aria-hidden="true" />
+                    <span className="transport-info">
+                      <span className="transport-name">✨ Automatic</span>
+                      <span className="transport-desc">Try peer-to-peer first, then use relay</span>
+                    </span>
+                  </label>
 
-                  <div 
+                  <label
                     className={`transport-option ${transportMode === 'webrtc' ? 'selected' : ''} ${!supportsWebRTC ? 'disabled' : ''}`}
-                    onClick={() => handleSelectTransport('webrtc')}
                   >
-                    <div className="transport-radio" />
-                    <div className="transport-info">
-                      <p className="transport-name">⚡ Peer-to-Peer</p>
-                      <p className="transport-desc">Direct connection • Faster • Bypasses server</p>
-                    </div>
-                  </div>
+                    <input type="radio" name="transport" value="webrtc" disabled={!supportsWebRTC} checked={transportMode === 'webrtc'} onChange={() => handleSelectTransport('webrtc')} />
+                    <span className="transport-radio" aria-hidden="true" />
+                    <span className="transport-info">
+                      <span className="transport-name">⚡ Peer-to-Peer</span>
+                      <span className="transport-desc">Direct connection • Faster • Bypasses server</span>
+                    </span>
+                  </label>
 
-                  <div 
+                  <label
                     className={`transport-option ${transportMode === 'relay' ? 'selected' : ''}`}
-                    onClick={() => handleSelectTransport('relay')}
                   >
-                    <div className="transport-radio" />
-                    <div className="transport-info">
-                      <p className="transport-name">↔ Server Relay</p>
-                      <p className="transport-desc">Route through server • Simple • Extremely reliable</p>
-                    </div>
-                  </div>
+                    <input type="radio" name="transport" value="relay" checked={transportMode === 'relay'} onChange={() => handleSelectTransport('relay')} />
+                    <span className="transport-radio" aria-hidden="true" />
+                    <span className="transport-info">
+                      <span className="transport-name">↔ Server Relay</span>
+                      <span className="transport-desc">Route through server • Simple • Extremely reliable</span>
+                    </span>
+                  </label>
                 </div>
 
                 {!supportsWebRTC && (
@@ -187,7 +188,7 @@ function Home() {
           <input ref={input} hidden type="file" onChange={event => choose(event.target.files?.[0])} />
         </div>
         
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         
         <div className="trust">
           <span>⌁</span>
@@ -220,11 +221,11 @@ function DiagnosticsPanel({
   
   return (
     <div className="diagnostics-section">
-      <button className="diagnostics-toggle" onClick={() => setOpen(!open)}>
+      <button className="diagnostics-toggle" aria-expanded={open} aria-controls="diagnostics-content" onClick={() => setOpen(!open)}>
         {open ? '▼ Hide Connection Details' : '▶ Show Connection Details'}
       </button>
       {open && (
-        <div className="diagnostics-content">
+        <div className="diagnostics-content" id="diagnostics-content">
           <div className="diagnostics-row">
             <div className="diagnostics-key">Transport Mode:</div>
             <div className="diagnostics-val" style={{ textTransform: 'capitalize' }}>{mode}</div>
@@ -274,8 +275,8 @@ function DiagnosticsPanel({
 function Sender() {
   const { transferId } = useParams();
   const location = useLocation();
-  const routeDetails = location.state as { file?: File; url: string; senderToken: string; sha256: string; transport?: TransportMode; fileName?: string; fileSize?: number } | undefined;
-  const saved = transferId ? (() => { try { return JSON.parse(sessionStorage.getItem(`sender:${transferId}`) || 'null') as { url:string; senderToken:string; sha256:string; transport?: TransportMode; fileName?:string; fileSize?:number } | null; } catch { return null; } })() : null;
+  const routeDetails = location.state as { file?: File; url: string; senderToken: string; sha256: string; transport?: TransportMode; fileName?: string; fileSize?: number; expiresAt?: string } | undefined;
+  const saved = transferId ? (() => { try { return JSON.parse(sessionStorage.getItem(`sender:${transferId}`) || 'null') as { url:string; senderToken:string; sha256:string; transport?: TransportMode; fileName?:string; fileSize?:number; expiresAt?:string } | null; } catch { return null; } })() : null;
   const details = routeDetails || saved;
   const [selectedFile, setSelectedFile] = useState<File | undefined>(routeDetails?.file);
   const file = routeDetails?.file || selectedFile;
@@ -284,6 +285,39 @@ function Sender() {
   const [error, setError] = useState('');
   const [transportStatus, setTransportStatus] = useState<TransportStatus>('new');
   const [activeMode, setActiveMode] = useState<TransportMode>(details?.transport || 'auto');
+  const [expiresAt, setExpiresAt] = useState<string | undefined>(details?.expiresAt);
+  const [clock, setClock] = useState(() => Date.now());
+  const [extending, setExtending] = useState(false);
+  const remainingMs = expiresAt ? Math.max(0, Date.parse(expiresAt) - clock) : undefined;
+  const fmtCountdown = (ms: number) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+  useEffect(() => {
+    if (!expiresAt) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [expiresAt]);
+
+  async function handleExtend() {
+    if (!transferId || !senderToken || !expiresAt) return;
+    setExtending(true);
+    try {
+      const next = await extendTransfer(transferId, senderToken);
+      setExpiresAt(next.expiresAt);
+      setClock(Date.now());
+      try {
+        const raw = sessionStorage.getItem(`sender:${transferId}`);
+        if (raw) {
+          const data = JSON.parse(raw);
+          data.expiresAt = next.expiresAt;
+          sessionStorage.setItem(`sender:${transferId}`, JSON.stringify(data));
+        }
+      } catch { /* non-fatal */ }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not extend this link.');
+    } finally {
+      setExtending(false);
+    }
+  }
   
   // Diagnostics
   const [iceState, setIceState] = useState('new');
@@ -347,26 +381,26 @@ function Sender() {
     });
 
     async function startTransfer(t: TransferTransport) {
-      console.log('[Sender] startTransfer called');
+      logger.debug('[Sender] startTransfer called');
       const f = file;
       if (!f) return;
       try {
         const totalChunks = Math.ceil(f.size / chunkSize);
-        console.log('[Sender] Total chunks:', totalChunks);
+        logger.debug('[Sender] Total chunks:', totalChunks);
         for (let i = startChunk.current; i < totalChunks; i++) {
           if (controller.signal.aborted) break;
           const chunk = await f.slice(i * chunkSize, Math.min(f.size, (i + 1) * chunkSize)).arrayBuffer();
-          console.log('[Sender] Sending chunk:', i);
+          logger.debug('[Sender] Sending chunk:', i);
           await t.sendChunk(chunk, i);
-          console.log('[Sender] Chunk sent:', i);
+          logger.debug('[Sender] Chunk sent:', i);
         }
         if (!controller.signal.aborted) {
-          console.log('[Sender] Calling t.complete()');
+          logger.debug('[Sender] Calling t.complete()');
           await t.complete?.();
-          console.log('[Sender] t.complete() finished');
+          logger.debug('[Sender] t.complete() finished');
         }
       } catch (e) {
-        console.error('SENDER: transfer loop error:', e);
+        logger.error('SENDER: transfer loop error:', e);
         if (!controller.signal.aborted) {
           setError(e instanceof Error ? e.message : 'Transfer failed');
         }
@@ -421,7 +455,16 @@ function Sender() {
               {details.url}
               <button onClick={() => navigator.clipboard.writeText(details.url)}>Copy</button>
             </div>
-            <p className="waiting">
+            {expiresAt && remainingMs !== undefined && (
+              <p className={`expiry ${remainingMs === 0 ? 'urgent' : remainingMs < 120000 ? 'urgent' : ''}`} role="status">
+                {remainingMs === 0
+                  ? 'Link expired — create a new transfer.'
+                  : <><span>Link expires in {fmtCountdown(remainingMs)}</span>{remainingMs < 120000 && senderToken && (
+                      <button className="link-extend" onClick={handleExtend} disabled={extending}>{extending ? 'Extending…' : 'Extend link'}</button>
+                    )}</>}
+              </p>
+            )}
+            <p className="waiting" role="status" aria-live="polite">
               {error ? `! ${error}` : waiting ? '◉ Waiting for receiver to accept…' : progress < 1 ? '◉ Sending and verifying…' : '✓ Transfer complete'}
             </p>
             {renderBadge()}
@@ -484,11 +527,11 @@ function Receiver() {
     });
 
     transport.onChunk(chunk => {
-      console.log('[Receiver] Chunk index:', chunk.index, 'bytes:', chunk.bytes.byteLength);
+      logger.debug('[Receiver] Chunk index:', chunk.index, 'bytes:', chunk.bytes.byteLength);
       try {
         if (chunk.index < expectedChunk.current) return;
         if (chunk.index !== expectedChunk.current) {
-          console.error('[Receiver] Chunks out of order!', chunk.index, 'expected:', expectedChunk.current);
+          logger.error('[Receiver] Chunks out of order!', chunk.index, 'expected:', expectedChunk.current);
           setState('Transfer failed: chunks arrived out of order.');
           transport.close();
           return;
@@ -507,20 +550,20 @@ function Receiver() {
         const totalSize = metadataRef.current?.fileSize || 1;
         setProgress(receivedBytes.current / totalSize);
       } catch (e) {
-        console.error('[Receiver] chunk processing error:', e);
+        logger.error('[Receiver] chunk processing error:', e);
         setState('Transfer failed: invalid chunk received.');
         transport.close();
       }
     });
 
     transport.onError(err => {
-      console.error('[Receiver] transport error:', err);
+      logger.error('[Receiver] transport error:', err);
       setState(err.message || 'Transfer failed');
       setFallbackReason(err.message);
     });
 
     transport.onStatusChange((status, mode) => {
-      console.log('[Receiver] status changed:', status, 'mode:', mode);
+      logger.debug('[Receiver] status changed:', status, 'mode:', mode);
       setTransportStatus(status);
       setActiveMode(mode);
       
@@ -538,7 +581,7 @@ function Receiver() {
     });
 
     transport.connect().catch(err => {
-      console.error('[Receiver] connect error:', err);
+      logger.error('[Receiver] connect error:', err);
       setState(err.message || 'Connection failed');
     });
 
@@ -548,28 +591,28 @@ function Receiver() {
   }, [transferId, receiverToken]);
 
   async function finishReceive() {
-    console.log('[Receiver] finishReceive called. Received bytes:', receivedBytes.current);
+    logger.debug('[Receiver] finishReceive called. Received bytes:', receivedBytes.current);
     await writes.current;
     const current = metadataRef.current;
     if (!current) {
-      console.error('[Receiver] No metadata in finishReceive');
+      logger.error('[Receiver] No metadata in finishReceive');
       return;
     }
 
     if (receivedBytes.current !== current.fileSize) {
-      console.error('[Receiver] Size mismatch! Received:', receivedBytes.current, 'Expected:', current.fileSize);
+      logger.error('[Receiver] Size mismatch! Received:', receivedBytes.current, 'Expected:', current.fileSize);
       setState('Transfer failed: received size did not match.');
       return;
     }
     const actualHash = digestHex(hash.current);
-    console.log('[Receiver] Expected hash:', current.sha256, 'Actual hash:', actualHash);
+    logger.debug('[Receiver] Expected hash:', current.sha256, 'Actual hash:', actualHash);
     if (current.sha256 && actualHash !== current.sha256) {
-      console.error('[Receiver] Hash verification failed!');
+      logger.error('[Receiver] Hash verification failed!');
       setState('Transfer failed: SHA-256 verification failed.');
       return;
     }
     
-    console.log('[Receiver] File verified. Saving...');
+    logger.debug('[Receiver] File verified. Saving...');
     await sink.current?.close();
     if (sink.current?.blobParts) {
       const blob = new Blob(received.current, { type: current.mimeType });
@@ -630,7 +673,7 @@ function Receiver() {
             ) : (
               <>
                 <Progress value={progress} file={{ name: metadata.fileName, fileSize: metadata.fileSize }} />
-                <p className="muted" style={{ marginTop: '12px' }}>{state}</p>
+                <p className="muted" style={{ marginTop: '12px' }} role="status" aria-live="polite">{state}</p>
                 {renderBadge()}
               </>
             )}
@@ -652,6 +695,6 @@ function Receiver() {
   );
 }
 
-function Progress({ value, file }: { value:number; file:{ name:string; fileSize:number } }) { const total = file.fileSize; return <div className="progress-wrap"><div className="progress-label"><strong>{Math.round(value * 100)}%</strong><span>{bytes(Math.min(value * total, total))} / {bytes(total)}</span></div><div className="bar"><span style={{ width:`${value * 100}%` }} /></div><p className="muted">{value >= 1 ? `✓ ${file.name} verified by SHA-256` : file.name}</p></div>; }
-function Empty({ title, text }: { title:string; text:string }) { return <section className="hero compact"><div className="card message"><h2>{title}</h2><p>{text}</p><Link to="/" className="button">Start over</Link></div></section>; }
-export default function App() { return <ErrorBoundary><Routes><Route path="/" element={<Home />} /><Route path="/transfer/:transferId" element={<Sender />} /><Route path="/receive/:transferId" element={<Receiver />} /><Route path="*" element={<Empty title="Page not found" text="This transfer path does not exist." />} /></Routes></ErrorBoundary>; }
+function Progress({ value, file }: { value:number; file:{ name:string; fileSize:number } }) { const total = file.fileSize; const percent = Math.round(value * 100); return <div className="progress-wrap"><div className="progress-label"><strong>{percent}%</strong><span>{bytes(Math.min(value * total, total))} / {bytes(total)}</span></div><div className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={`Progress for ${file.name}`}><span style={{ width:`${value * 100}%` }} /></div><p className="muted">{value >= 1 ? `✓ ${file.name} verified by SHA-256` : file.name}</p></div>; }
+function Empty({ title, text }: { title:string; text:string }) { return <section className="hero compact"><div className="card message"><h1>{title}</h1><p>{text}</p><Link to="/" className="button">Start over</Link></div></section>; }
+export default function App() { return <ErrorBoundary><Routes><Route path="/" element={<Home />} /><Route path="/transfer/:transferId" element={<Sender />} /><Route path="/receive/:transferId" element={<Receiver />} /><Route path="*" element={<Shell><Empty title="Page not found" text="This transfer path does not exist." /></Shell>} /></Routes></ErrorBoundary>; }

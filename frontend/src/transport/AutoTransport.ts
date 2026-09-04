@@ -3,6 +3,7 @@ import { WebSocketRelayTransport } from './WebSocketRelayTransport';
 import { WebRTCTransport } from './WebRTCTransport';
 import { Metadata, Message } from '../types';
 import { TransferClient } from '../services/transferClient';
+import { logger } from '../services/logger';
 
 export class AutoTransport implements TransferTransport {
   private role: 'sender' | 'receiver';
@@ -42,23 +43,23 @@ export class AutoTransport implements TransferTransport {
     
     // We listen to signaling fallback messages on the client
     this.removeMessageListener = this.client.onMessage(msg => {
-      console.log(`[AutoTransport] [${this.role}] Received signaling:`, msg.type);
+      logger.debug(`[AutoTransport] [${this.role}] Received signaling:`, msg.type);
       if (msg.type === 'webrtc_fallback') {
-        console.log('[AutoTransport] Fallback signal received from peer. Triggering fallback.');
+        logger.debug('[AutoTransport] Fallback signal received from peer. Triggering fallback.');
         this.triggerFallback();
       } else if (msg.type === 'transfer_accepted' && this.role === 'sender') {
-        console.log('[AutoTransport] Receiver accepted. Starting handshake timeout timer.');
+        logger.debug('[AutoTransport] Receiver accepted. Starting handshake timeout timer.');
         const timeout = Number(import.meta.env.VITE_WEBRTC_CONNECTION_TIMEOUT || 10000);
         window.clearTimeout(this.fallbackTimer);
         this.fallbackTimer = window.setTimeout(() => {
-          console.log('[AutoTransport] WebRTC connection timeout. Falling back to relay.');
+          logger.debug('[AutoTransport] WebRTC connection timeout. Falling back to relay.');
           this.triggerFallback();
         }, timeout);
       } else if (msg.type === 'transfer_offer' && this.role === 'receiver') {
         const timeout = Number(import.meta.env.VITE_WEBRTC_CONNECTION_TIMEOUT || 10000);
         window.clearTimeout(this.fallbackTimer);
         this.fallbackTimer = window.setTimeout(() => {
-          console.log('[AutoTransport] WebRTC connection timeout (receiver). Falling back to relay.');
+          logger.debug('[AutoTransport] WebRTC connection timeout (receiver). Falling back to relay.');
           this.triggerFallback();
         }, timeout);
       } else if (msg.type === 'webrtc_connected') {
@@ -88,14 +89,14 @@ export class AutoTransport implements TransferTransport {
     });
 
     webrtc.onError(err => {
-      console.log('[AutoTransport] WebRTC error encountered:', err.message);
+      logger.debug('[AutoTransport] WebRTC error encountered:', err.message);
       this.triggerFallback();
     });
 
 
 
     webrtc.connect().catch(err => {
-      console.error('[AutoTransport] Failed to start WebRTC connection:', err);
+      logger.warn('[AutoTransport] Failed to start WebRTC connection:', err);
       this.triggerFallback();
     });
   }
@@ -104,7 +105,7 @@ export class AutoTransport implements TransferTransport {
     window.clearTimeout(this.fallbackTimer);
     if (this.currentActiveTransportMode === 'relay') return;
     
-    console.log('[AutoTransport] Performing active switch to Server Relay');
+    logger.info('[AutoTransport] Performing active switch to Server Relay');
     this.currentActiveTransportMode = 'relay';
     
     // Inform peer if we are sender
@@ -192,7 +193,7 @@ export class AutoTransport implements TransferTransport {
   }
 
   async complete(): Promise<void> {
-    console.log('[AutoTransport] complete() called');
+    logger.debug('[AutoTransport] complete() called');
     await this.activeTransport?.complete?.();
     this.updateStatus('completed', this.currentActiveTransportMode);
   }
