@@ -319,4 +319,147 @@ button:focus-visible,
   .dropzone:hover {
     transform: none;
   }
+}
+
+/* --- Light theme --- */
+html[data-theme='light'] {
+  color: #17231e;
+  background: #eef1ee;
+  color-scheme: light;
+}
+html[data-theme='light'] body {
+  background: radial-gradient(circle at 50% -10%, #dce6df 0, #eef1ee 46%, #e4eae6 100%);
+}
+html[data-theme='light'] .brand,
+html[data-theme='light'] .transport-name,
+html[data-theme='light'] .trust strong,
+html[data-theme='light'] .diagnostics-val,
+html[data-theme='light'] .transport-badge.relay {
+  color: #1c2a24;
+}
+html[data-theme='light'] .privacy,
+html[data-theme='light'] .muted,
+html[data-theme='light'] .transport-desc,
+html[data-theme='light'] .diagnostics-key,
+html[data-theme='light'] .diagnostics-toggle,
+html[data-theme='light'] .history-meta,
+html[data-theme='light'] .transport-badge.connecting,
+html[data-theme='light'] .expiry {
+  color: #5c6b64;
+}
+html[data-theme='light'] .lede,
+html[data-theme='light'] .dropzone p,
+html[data-theme='light'] .trust,
+html[data-theme='light'] .transport-explainer,
+html[data-theme='light'] footer {
+  color: #44544d;
+}
+html[data-theme='light'] .card {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(23, 35, 30, 0.12);
+  box-shadow: 0 24px 60px rgba(23, 35, 30, 0.12);
+}
+html[data-theme='light'] .transport-option {
+  background: rgba(255, 255, 255, 0.55);
+  border-color: rgba(23, 35, 30, 0.14);
+}
+html[data-theme='light'] .transport-option:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(93, 122, 11, 0.45);
+}
+html[data-theme='light'] .transport-option.selected {
+  border-color: #5d7a0b;
+  background: rgba(93, 122, 11, 0.1);
+}
+html[data-theme='light'] .transport-radio {
+  border-color: #5c6b64;
+}
+html[data-theme='light'] .transport-explainer {
+  background: rgba(23, 35, 30, 0.045);
+  border-left-color: #5d7a0b;
+}
+html[data-theme='light'] .secondary,
+html[data-theme='light'] .linkbox {
+  border-color: #9db0a8;
+}
+html[data-theme='light'] .secondary,
+html[data-theme='light'] .linkbox button {
+  color: #1c2a24;
+}
+html[data-theme='light'] .bar {
+  background: #d3ddd6;
+}
+html[data-theme='light'] .diagnostics-section {
+  border-top-color: rgba(23, 35, 30, 0.12);
+}
+html[data-theme='light'] .diagnostics-content {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: rgba(23, 35, 30, 0.1);
+}
+html[data-theme='light'] .history li + li {
+  border-top-color: rgba(23, 35, 30, 0.08);
+}
+html[data-theme='light'] .history-row:hover {
+  background: rgba(93, 122, 11, 0.08);
+}
+html[data-theme='light'] .dropzone:hover {
+  border-color: #5d7a0b;
+}
+html[data-theme='light'] .brand span,
+html[data-theme='light'] .eyebrow,
+html[data-theme='light'] .label,
+html[data-theme='light'] .waiting,
+html[data-theme='light'] .transport-selector-title,
+html[data-theme='light'] .trust span:first-child,
+html[data-theme='light'] .trust > span:nth-child(3),
+html[data-theme='light'] .history-resume,
+html[data-theme='light'] .transport-badge.webrtc {
+  color: #5d7a0b;
+}
+html[data-theme='light'] .transport-badge.webrtc {
+  background: rgba(93, 122, 11, 0.1);
+  border-color: rgba(93, 122, 11, 0.25);
+}
+html[data-theme='light'] .transport-badge.relay {
+  background: rgba(23, 53, 45, 0.06);
+  border-color: rgba(23, 53, 45, 0.2);
+}
+html[data-theme='light'] .error,
+html[data-theme='light'] .expiry.urgent,
+html[data-theme='light'] .link-extend {
+  color: #b13a2a;
+}
+html[data-theme='light'] .link-extend {
+  border-color: rgba(177, 58, 42, 0.5);
+}
+html[data-theme='light'] .link-extend:hover {
+  background: rgba(177, 58, 42, 0.08);
+}
+html[data-theme='light'] a:focus-visible,
+html[data-theme='light'] button:focus-visible,
+html[data-theme='light'] .dropzone:focus-visible,
+html[data-theme='light'] .transport-option:focus-within,
+html[data-theme='light'] .button:focus-visible,
+html[data-theme='light'] .brand:focus-visible,
+html[data-theme='light'] .diagnostics-toggle:focus-visible {
+  outline-color: #5d7a0b;
+}
+
+/* Theme toggle */
+.theme-toggle {
+  font: 600 12px Manrope;
+  padding: 6px 12px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid rgba(148, 167, 160, 0.35);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.theme-toggle:hover {
+  border-color: #d4f25c;
+}
+@media (max-width: 600px) {
+  .theme-toggle {
+    display: none;
+  }
 }

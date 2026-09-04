@@ -12,7 +12,24 @@ import { addHistory, clearHistory, getHistory, updateHistory, type HistoryEntry 
 
 const chunkSize = 2 * 1024 * 1024;
 const bytes = (value: number) => value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(2)} MB` : `${(value / 1024 ** 3).toFixed(2)} GB`;
-function Shell({ children }: { children: ReactNode }) { return <main><header><Link to="/" className="brand"><span>◈</span> relay</Link><span className="privacy">Temporary by design</span></header>{children}<footer>Files stream through memory only. Nothing is permanently stored.</footer></main>; }
+function Shell({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      return (localStorage.getItem('relay:theme') as 'light' | 'dark') || 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem('relay:theme', theme);
+    } catch {
+      // best-effort persistence
+    }
+  }, [theme]);
+  return <main><header><Link to="/" className="brand"><span>◈</span> relay</Link><span className="privacy">Temporary by design</span><button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</button></header>{children}<footer>Files stream through memory only. Nothing is permanently stored.</footer></main>;
+}
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   state = { hasError: false };
