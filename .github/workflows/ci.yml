@@ -17,7 +17,10 @@ jobs:
         with:
           go-version: '1.22.x'
       - run: go test ./...
-      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: backend
       - run: go test -race ./...
       - run: go build ./cmd/server
 
@@ -34,6 +37,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - run: npm audit --audit-level=high
       - run: npm test
       - run: npm run build
 
@@ -48,6 +52,8 @@ jobs:
           file: ./backend/Dockerfile
           push: false
           tags: relay-backend:ci
+          provenance: true
+          sbom: true
 
   e2e:
     runs-on: ubuntu-latest
