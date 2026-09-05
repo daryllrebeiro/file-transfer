@@ -458,6 +458,36 @@ html[data-theme='light'] .diagnostics-toggle:focus-visible {
 .theme-toggle:hover {
   border-color: #d4f25c;
 }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lang-select {
+  font: 600 12px Manrope;
+  padding: 5px 8px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid rgba(148, 167, 160, 0.35);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.lang-select:hover {
+  border-color: #d4f25c;
+}
+.lang-select option {
+  background: #101918;
+  color: #e9eef1;
+}
+html[data-theme='light'] .lang-select option {
+  background: #ffffff;
+  color: #17231e;
+}
+@media (max-width: 600px) {
+  .lang-select {
+    display: none;
+  }
+}
 .send-tabs {
   display: inline-flex;
   gap: 6px;

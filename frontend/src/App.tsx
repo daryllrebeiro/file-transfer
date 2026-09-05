@@ -9,6 +9,7 @@ import { createTransferTransport, type TransportMode, type TransportStatus } fro
 import { type TransferTransport } from './transport/TransferTransport';
 import { logger } from './services/logger';
 import { addHistory, clearHistory, getHistory, updateHistory, type HistoryEntry } from './services/history';
+import { locales, t, useLocale, useT, type Locale } from './i18n';
 
 const chunkSize = 2 * 1024 * 1024;
 const bytes = (value: number) => value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(2)} MB` : `${(value / 1024 ** 3).toFixed(2)} GB`;
@@ -28,7 +29,9 @@ function Shell({ children }: { children: ReactNode }) {
       // best-effort persistence
     }
   }, [theme]);
-  return <main><header><Link to="/" className="brand"><span>◈</span> relay</Link><span className="privacy">Temporary by design</span><button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</button></header>{children}<footer>Files stream through memory only. Nothing is permanently stored.</footer></main>;
+  const { locale, change } = useLocale();
+  const translate = useT();
+  return <main><header><Link to="/" className="brand"><span>◈</span> relay</Link><span className="privacy">{translate('brand.tagline')}</span><span className="header-actions"><button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? translate('theme.toLight') : translate('theme.toDark')}>{theme === 'dark' ? translate('theme.light') : translate('theme.dark')}</button><select className="lang-select" aria-label={translate('lang.label')} value={locale} onChange={event => change(event.target.value as Locale)}>{locales.map(localeOption => <option key={localeOption} value={localeOption}>{localeOption.toUpperCase()}</option>)}</select></span></header>{children}<footer>{translate('brand.footer')}</footer></main>;
 }
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
@@ -41,7 +44,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
   }
 
   render() {
-    if (this.state.hasError) return <Shell><section className="hero compact"><div className="card message"><h2>Something went wrong</h2><p>Reload this page or start a new transfer.</p><Link to="/" className="button">Start over</Link></div></section></Shell>;
+    if (this.state.hasError) return <Shell><section className="hero compact"><div className="card message"><h2>{t('errorBoundary.title')}</h2><p>{t('errorBoundary.text')}</p><Link to="/" className="button">{t('startOver')}</Link></div></section></Shell>;
     return this.props.children;
   }
 }
@@ -49,6 +52,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 function Home() {
   const navigate = useNavigate();
   const input = useRef<HTMLInputElement>(null);
+  const translate = useT();
   const [file, setFile] = useState<File>();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -85,7 +89,7 @@ function Home() {
     const target = chosen ?? file;
     if (!target) return;
     if (limits && target.size > limits.maxFileSize) {
-      setError(`This file is larger than the configured ${bytes(limits.maxFileSize)} limit.`);
+      setError(translate('tooLarge', { max: bytes(limits.maxFileSize) }));
       return;
     }
     setBusy(true);
@@ -129,36 +133,36 @@ function Home() {
   return (
     <Shell>
       <section className="hero">
-        <p className="eyebrow">PRIVATE FILE RELAY</p>
-        <h1>Send files without leaving a trail.</h1>
-        <p className="lede">A fast, temporary bridge between your devices. Your file is streamed while you need it, then forgotten.</p>
+        <p className="eyebrow">{translate('home.eyebrow')}</p>
+        <h1>{translate('home.title')}</h1>
+        <p className="lede">{translate('home.lede')}</p>
 
-        <div className="send-tabs" role="tablist" aria-label="What do you want to send?">
-          <button className={`send-tab ${sendMode === 'file' ? 'active' : ''}`} role="tab" aria-selected={sendMode === 'file'} onClick={() => setSendMode('file')}>File</button>
-          <button className={`send-tab ${sendMode === 'text' ? 'active' : ''}`} role="tab" aria-selected={sendMode === 'text'} onClick={() => setSendMode('text')}>Text</button>
+        <div className="send-tabs" role="tablist" aria-label={translate('tabs.what')}>
+          <button className={`send-tab ${sendMode === 'file' ? 'active' : ''}`} role="tab" aria-selected={sendMode === 'file'} onClick={() => setSendMode('file')}>{translate('tab.file')}</button>
+          <button className={`send-tab ${sendMode === 'text' ? 'active' : ''}`} role="tab" aria-selected={sendMode === 'text'} onClick={() => setSendMode('text')}>{translate('tab.text')}</button>
         </div>
 
         <div className="card dropzone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); choose(event.dataTransfer.files[0]); }}>
           {sendMode === 'text' ? (
             <>
               <div className="file-icon">T</div>
-              <h2>Send text</h2>
-              <p className="muted">Up to 64 KB · arrives as message.txt</p>
-              <textarea className="text-input" value={text} onChange={event => setText(event.target.value.slice(0, textLimit))} rows={8} placeholder="Paste text or a link…" aria-label="Text to send" />
-              <p className="text-count">{bytes(text.length)} of {bytes(textLimit)}</p>
+              <h2>{translate('send.text')}</h2>
+              <p className="muted">{translate('send.textHint')}</p>
+              <textarea className="text-input" value={text} onChange={event => setText(event.target.value.slice(0, textLimit))} rows={8} placeholder={translate('send.textPlaceholder')} aria-label={translate('send.textAria')} />
+              <p className="text-count">{translate('send.textCount', { used: bytes(text.length), limit: bytes(textLimit) })}</p>
               <div className="actions">
-                <button className="secondary" onClick={() => setSendMode('file')}>Send a file instead</button>
-                <button onClick={() => void createText()} disabled={busy || text.trim().length === 0}>{busy ? 'Hashing text…' : 'Create text link →'}</button>
+                <button className="secondary" onClick={() => setSendMode('file')}>{translate('send.fileInstead')}</button>
+                <button onClick={() => void createText()} disabled={busy || text.trim().length === 0}>{busy ? translate('create.textHashing') : translate('create.text')}</button>
               </div>
             </>
           ) : file ? (
             <>
               <div className="file-icon">↗</div>
               <h2>{file.name}</h2>
-              <p>{bytes(file.size)} <span className="muted">· {file.type || 'Unknown type'}</span></p>
+              <p>{bytes(file.size)} <span className="muted">· {file.type || translate('file.unknownType')}</span></p>
               
               <div className="transport-selector">
-                <p className="transport-selector-title">TRANSFER METHOD</p>
+                <p className="transport-selector-title">{translate('transport.title')}</p>
                 <div className="transport-options" role="radiogroup" aria-label="Transfer method">
                   <label
                     className={`transport-option ${transportMode === 'auto' ? 'selected' : ''} ${!supportsWebRTC ? 'disabled' : ''}`}
@@ -166,8 +170,8 @@ function Home() {
                     <input type="radio" name="transport" value="auto" disabled={!supportsWebRTC} checked={transportMode === 'auto'} onChange={() => handleSelectTransport('auto')} />
                     <span className="transport-radio" aria-hidden="true" />
                     <span className="transport-info">
-                      <span className="transport-name">✨ Automatic</span>
-                      <span className="transport-desc">Try peer-to-peer first, then use relay</span>
+                      <span className="transport-name">{translate('transport.auto.name')}</span>
+                      <span className="transport-desc">{translate('transport.auto.desc')}</span>
                     </span>
                   </label>
 
@@ -177,8 +181,8 @@ function Home() {
                     <input type="radio" name="transport" value="webrtc" disabled={!supportsWebRTC} checked={transportMode === 'webrtc'} onChange={() => handleSelectTransport('webrtc')} />
                     <span className="transport-radio" aria-hidden="true" />
                     <span className="transport-info">
-                      <span className="transport-name">⚡ Peer-to-Peer</span>
-                      <span className="transport-desc">Direct connection • Faster • Bypasses server</span>
+                      <span className="transport-name">{translate('transport.webrtc.name')}</span>
+                      <span className="transport-desc">{translate('transport.webrtc.desc')}</span>
                     </span>
                   </label>
 
@@ -188,51 +192,51 @@ function Home() {
                     <input type="radio" name="transport" value="relay" checked={transportMode === 'relay'} onChange={() => handleSelectTransport('relay')} />
                     <span className="transport-radio" aria-hidden="true" />
                     <span className="transport-info">
-                      <span className="transport-name">↔ Server Relay</span>
-                      <span className="transport-desc">Route through server • Simple • Extremely reliable</span>
+                      <span className="transport-name">{translate('transport.relay.name')}</span>
+                      <span className="transport-desc">{translate('transport.relay.desc')}</span>
                     </span>
                   </label>
                 </div>
 
                 {!supportsWebRTC && (
                   <p className="error" style={{ marginTop: '12px', textAlign: 'center' }}>
-                    WebRTC is not supported in this browser. Peer-to-Peer transfer is disabled.
+                    {translate('transport.webrtcUnsupported')}
                   </p>
                 )}
 
                 {supportsWebRTC && transportMode === 'webrtc' && (
                   <div className="transport-explainer">
-                    <strong>Peer-to-Peer:</strong>
+                    <strong>{translate('transport.explainer.webrtc')}</strong>
                     <ul>
-                      <li>File bytes travel directly between your devices.</li>
-                      <li>Go server is used for signaling handshake only.</li>
-                      <li>May fail on restrictive firewalls without a TURN server.</li>
+                      <li>{translate('transport.explainer.webrtc.1')}</li>
+                      <li>{translate('transport.explainer.webrtc.2')}</li>
+                      <li>{translate('transport.explainer.webrtc.3')}</li>
                     </ul>
                   </div>
                 )}
                 {supportsWebRTC && transportMode === 'relay' && (
                   <div className="transport-explainer">
-                    <strong>Server Relay:</strong>
+                    <strong>{translate('transport.explainer.relay')}</strong>
                     <ul>
-                      <li>Streamed in transit through the transfer server.</li>
-                      <li>Works in almost any network configuration.</li>
-                      <li>Simple and reliable connection.</li>
+                      <li>{translate('transport.explainer.relay.1')}</li>
+                      <li>{translate('transport.explainer.relay.2')}</li>
+                      <li>{translate('transport.explainer.relay.3')}</li>
                     </ul>
                   </div>
                 )}
               </div>
 
               <div className="actions">
-                <button className="secondary" onClick={() => input.current?.click()}>Change file</button>
-                <button onClick={() => void create()} disabled={busy}>{busy ? 'Hashing file…' : 'Create transfer link →'}</button>
+                <button className="secondary" onClick={() => input.current?.click()}>{translate('file.change')}</button>
+                <button onClick={() => void create()} disabled={busy}>{busy ? translate('create.fileHashing') : translate('create.file')}</button>
               </div>
             </>
           ) : (
             <>
               <div className="upload-mark">↑</div>
-              <h2>Drop a file here</h2>
-              <p>or choose one from this device</p>
-              <button onClick={() => input.current?.click()}>Choose a file</button>
+              <h2>{translate('drop.here')}</h2>
+              <p>{translate('drop.or')}</p>
+              <button onClick={() => input.current?.click()}>{translate('drop.choose')}</button>
             </>
           )}
           <input ref={input} hidden type="file" onChange={event => choose(event.target.files?.[0])} />
@@ -242,34 +246,35 @@ function Home() {
         
         <div className="trust">
           <span>⌁</span>
-          <div><strong>No permanent storage</strong><br/><span>Links expire automatically after 15 minutes.</span></div>
+          <div><strong>{translate('trust.1.title')}</strong><br/><span>{translate('trust.1.sub')}</span></div>
           <span>◷</span>
-          <div><strong>Streamed in chunks</strong><br/><span>Integrity checked with SHA-256.</span></div>
+          <div><strong>{translate('trust.2.title')}</strong><br/><span>{translate('trust.2.sub')}</span></div>
         </div>
 
         {history.length > 0 && (
-          <section className="history" aria-label="Recent transfers">
+          <section className="history" aria-label={translate('history.title')}>
             <div className="history-head">
-              <h2>Recent transfers</h2>
-              <button className="secondary" onClick={() => { clearHistory(); setHistory([]); }}>Clear</button>
+              <h2>{translate('history.title')}</h2>
+              <button className="secondary" onClick={() => { clearHistory(); setHistory([]); }}>{translate('history.clear')}</button>
             </div>
             <ul>
               {history.map(entry => {
                 const resumable = (() => { try { return !!sessionStorage.getItem(`sender:${entry.id}`); } catch { return false; } })();
+                const outcomeLabel = entry.outcome === 'sent' ? translate('history.outcome.sent') : entry.outcome === 'failed' ? translate('history.outcome.failed') : translate('history.outcome.created');
                 return (
                   <li key={entry.id}>
                     {resumable ? (
                       <button className="history-row" onClick={() => navigate(`/transfer/${entry.id}`)}>
                         <span className="history-outcome" data-outcome={entry.outcome} aria-hidden="true" />
                         <span className="history-name">{entry.name}</span>
-                        <span className="history-meta">{bytes(entry.size)} · {new Date(entry.ts).toLocaleString()} · {entry.outcome === 'sent' ? 'Sent' : entry.outcome === 'failed' ? 'Failed' : 'Created'}</span>
-                        <span className="history-resume">Resume →</span>
+                        <span className="history-meta">{bytes(entry.size)} · {new Date(entry.ts).toLocaleString()} · {outcomeLabel}</span>
+                        <span className="history-resume">{translate('history.resume')}</span>
                       </button>
                     ) : (
                       <span className="history-row history-row-static">
                         <span className="history-outcome" data-outcome={entry.outcome} aria-hidden="true" />
                         <span className="history-name">{entry.name}</span>
-                        <span className="history-meta">{bytes(entry.size)} · {new Date(entry.ts).toLocaleString()} · {entry.outcome === 'sent' ? 'Sent' : entry.outcome === 'failed' ? 'Failed' : 'Created'}</span>
+                        <span className="history-meta">{bytes(entry.size)} · {new Date(entry.ts).toLocaleString()} · {outcomeLabel}</span>
                       </span>
                     )}
                   </li>
@@ -355,6 +360,7 @@ function DiagnosticsPanel({
 }
 
 function Sender() {
+  const translate = useT();
   const { transferId } = useParams();
   const location = useLocation();
   const routeDetails = location.state as { file?: File; url: string; senderToken: string; sha256: string; transport?: TransportMode; fileName?: string; fileSize?: number; expiresAt?: string } | undefined;
@@ -520,21 +526,21 @@ function Sender() {
     };
   }, [transferId, file, senderToken, sha256Val, details?.transport]);
 
-  if (!details?.senderToken) return <Shell><Empty title="Sender session unavailable" text="Return home and create a new transfer link." /></Shell>;
-  if (!file) return <Shell><section className="hero compact"><div className="card message"><h2>Choose the original file to resume</h2><p>{details.fileName || 'Original file'}{details.fileSize ? ` · ${bytes(details.fileSize)}` : ''}</p><input type="file" onChange={event => setSelectedFile(event.target.files?.[0])} /></div></section></Shell>;
+  if (!details?.senderToken) return <Shell><Empty title={translate('sender.unavailable')} text={translate('sender.unavailable.text')} /></Shell>;
+  if (!file) return <Shell><section className="hero compact"><div className="card message"><h2>{translate('sender.resume')}</h2><p>{details.fileName || translate('sender.originalFile')}{details.fileSize ? ` · ${bytes(details.fileSize)}` : ''}</p><input type="file" onChange={event => setSelectedFile(event.target.files?.[0])} /></div></section></Shell>;
 
   const renderBadge = () => {
     if (waiting) {
-      return <div className="transport-badge connecting">◌ Establishing connection...</div>;
+      return <div className="transport-badge connecting">{translate('badge.connecting')}</div>;
     }
     if (activeMode === 'webrtc') {
-      return <div className="transport-badge webrtc">⚡ Connected directly (P2P)</div>;
+      return <div className="transport-badge webrtc">{translate('badge.webrtc')}</div>;
     }
     if (activeMode === 'relay') {
       const isFallback = details?.transport === 'auto';
       return (
         <div className="transport-badge relay">
-          {isFallback ? '↔ Direct connection unavailable • Using relay' : '↔ Server Relay active'}
+          {isFallback ? translate('badge.relayFallback') : translate('badge.relayActive')}
         </div>
       );
     }
@@ -544,29 +550,29 @@ function Sender() {
   return (
     <Shell>
       <section className="hero compact">
-        <p className="eyebrow">TRANSFER READY</p>
-        <h1>Share the bridge.</h1>
+        <p className="eyebrow">{translate('sender.readyEyebrow')}</p>
+        <h1>{translate('sender.shareTitle')}</h1>
         <div className="card status-card">
           <div className="qr">
             <QRCodeSVG value={details.url} size={148} />
           </div>
           <div>
-            <p className="label">YOUR LINK</p>
+            <p className="label">{translate('sender.yourLink')}</p>
             <div className="linkbox">
               {details.url}
-              <button onClick={() => navigator.clipboard.writeText(details.url)}>Copy</button>
+              <button onClick={() => navigator.clipboard.writeText(details.url)}>{translate('copy')}</button>
             </div>
             {expiresAt && remainingMs !== undefined && (
               <p className={`expiry ${remainingMs === 0 ? 'urgent' : remainingMs < 120000 ? 'urgent' : ''}`} role="status">
                 {remainingMs === 0
-                  ? 'Link expired — create a new transfer.'
-                  : <><span>Link expires in {fmtCountdown(remainingMs)}</span>{remainingMs < 120000 && senderToken && (
-                      <button className="link-extend" onClick={handleExtend} disabled={extending}>{extending ? 'Extending…' : 'Extend link'}</button>
+                  ? translate('link.expired')
+                  : <><span>{translate('link.expiresIn', { time: fmtCountdown(remainingMs) })}</span>{remainingMs < 120000 && senderToken && (
+                      <button className="link-extend" onClick={handleExtend} disabled={extending}>{extending ? translate('link.extending') : translate('link.extend')}</button>
                     )}</>}
               </p>
             )}
             <p className="waiting" role="status" aria-live="polite">
-              {error ? `! ${error}` : waiting ? '◉ Waiting for receiver to accept…' : progress < 1 ? '◉ Sending and verifying…' : '✓ Transfer complete'}
+              {error ? `! ${error}` : waiting ? translate('status.waiting') : progress < 1 ? translate('status.sending') : translate('status.complete')}
             </p>
             {renderBadge()}
           </div>
@@ -587,6 +593,16 @@ function Sender() {
 }
 
 function Receiver() {
+  const translate = useT();
+  const statusKeys: Record<string, string> = {
+    'Connecting…': 'status.connecting',
+    'Waiting for your approval': 'receive.waitingApproval',
+    'Receiving…': 'status.receiving',
+    'Download complete': 'receive.done',
+    'File received.': 'receive.done',
+    'This receiver link is missing its access token.': 'empty.missingToken',
+  };
+  const statusLabel = (raw: string) => { const key = statusKeys[raw]; return key ? translate(key) : raw; };
   const { transferId } = useParams();
   const receiverToken = (() => { const hash = window.location.hash.slice(1); return new URLSearchParams(hash).get('token') || ''; })();
   const [metadata, setMetadata] = useState<Metadata>();
@@ -740,16 +756,16 @@ function Receiver() {
 
   const renderBadge = () => {
     if (state === 'Connecting…') {
-      return <div className="transport-badge connecting">◌ Connecting...</div>;
+      return <div className="transport-badge connecting">{translate('badge.connecting')}</div>;
     }
     if (activeMode === 'webrtc') {
-      return <div className="transport-badge webrtc">⚡ Connected directly (P2P)</div>;
+      return <div className="transport-badge webrtc">{translate('badge.webrtc')}</div>;
     }
     if (activeMode === 'relay') {
       const isFallback = metadata?.transport === 'auto';
       return (
         <div className="transport-badge relay">
-          {isFallback ? '↔ Direct connection unavailable • Using relay' : '↔ Server Relay active'}
+          {isFallback ? translate('badge.relayFallback') : translate('badge.relayActive')}
         </div>
       );
     }
@@ -759,22 +775,22 @@ function Receiver() {
   return (
     <Shell>
       <section className="hero compact">
-        <p className="eyebrow">INCOMING TRANSFER</p>
-        <h1>{state === 'Download complete' ? 'File received.' : 'A file is waiting.'}</h1>
+        <p className="eyebrow">{translate('receive.incoming')}</p>
+        <h1>{state === 'Download complete' ? translate('receive.done') : translate('receive.waitingFile')}</h1>
         {metadata ? (
           <div className="card receive-card">
             <div className="file-icon">↘</div>
             <h2>{metadata.fileName}</h2>
-            <p>{bytes(metadata.fileSize)} <span className="muted">· From another device</span></p>
+            <p>{bytes(metadata.fileSize)} <span className="muted">· {translate('receive.fromDevice')}</span></p>
             {state === 'Waiting for your approval' ? (
               <div className="actions">
-                <button onClick={() => void accept()}>Download file</button>
-                <button className="secondary" onClick={() => transportRef.current?.close()}>Reject</button>
+                <button onClick={() => void accept()}>{translate('receive.download')}</button>
+                <button className="secondary" onClick={() => transportRef.current?.close()}>{translate('receive.reject')}</button>
               </div>
             ) : (
               <>
                 <Progress value={progress} file={{ name: metadata.fileName, fileSize: metadata.fileSize }} />
-                <p className="muted" style={{ marginTop: '12px' }} role="status" aria-live="polite">{state}</p>
+                <p className="muted" style={{ marginTop: '12px' }} role="status" aria-live="polite">{statusLabel(state)}</p>
                 {renderBadge()}
               </>
             )}
@@ -789,13 +805,13 @@ function Receiver() {
             />
           </div>
         ) : (
-          <div className="card message">{state}</div>
+          <div className="card message">{statusLabel(state)}</div>
         )}
       </section>
     </Shell>
   );
 }
 
-function Progress({ value, file }: { value:number; file:{ name:string; fileSize:number } }) { const total = file.fileSize; const percent = Math.round(value * 100); return <div className="progress-wrap"><div className="progress-label"><strong>{percent}%</strong><span>{bytes(Math.min(value * total, total))} / {bytes(total)}</span></div><div className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={`Progress for ${file.name}`}><span style={{ width:`${value * 100}%` }} /></div><p className="muted">{value >= 1 ? `✓ ${file.name} verified by SHA-256` : file.name}</p></div>; }
-function Empty({ title, text }: { title:string; text:string }) { return <section className="hero compact"><div className="card message"><h1>{title}</h1><p>{text}</p><Link to="/" className="button">Start over</Link></div></section>; }
+function Progress({ value, file }: { value:number; file:{ name:string; fileSize:number } }) { const translate = useT(); const total = file.fileSize; const percent = Math.round(value * 100); return <div className="progress-wrap"><div className="progress-label"><strong>{percent}%</strong><span>{bytes(Math.min(value * total, total))} / {bytes(total)}</span></div><div className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={`Progress for ${file.name}`}><span style={{ width:`${value * 100}%` }} /></div><p className="muted">{value >= 1 ? translate('progress.verified', { name: file.name }) : file.name}</p></div>; }
+function Empty({ title, text }: { title:string; text:string }) { const translate = useT(); return <section className="hero compact"><div className="card message"><h1>{title}</h1><p>{text}</p><Link to="/" className="button">{translate('startOver')}</Link></div></section>; }
 export default function App() { return <ErrorBoundary><Routes><Route path="/" element={<Home />} /><Route path="/transfer/:transferId" element={<Sender />} /><Route path="/receive/:transferId" element={<Receiver />} /><Route path="*" element={<Shell><Empty title="Page not found" text="This transfer path does not exist." /></Shell>} /></Routes></ErrorBoundary>; }
