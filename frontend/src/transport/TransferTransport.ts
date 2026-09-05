@@ -33,4 +33,6 @@ export interface TransferTransport {
   getChunkSize?(): number | undefined;
   accept?(): void;
   complete?(): Promise<void>;
+  pause?(): void;
+  rewind?(fromChunk: number): void;
 }

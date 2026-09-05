@@ -316,6 +316,28 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if receiver != nil {
 			_ = receiver.Close()
 		}
+	case "pause":
+		if role != transfer.ReceiverRole {
+			return
+		}
+		if _, err := handler.Manager.Pause(id); err != nil {
+			return
+		}
+		sender, _, ok := handler.Manager.Connections(id)
+		if ok && sender != nil {
+			_ = sender.SendControl(controlBytes(control{Type: "paused"}))
+		}
+	case "rewind":
+		if role != transfer.ReceiverRole {
+			return
+		}
+		if _, err := handler.Manager.Rewind(id, message.NextChunk); err != nil {
+			return
+		}
+		sender, _, ok := handler.Manager.Connections(id)
+		if ok && sender != nil {
+			_ = sender.SendControl(controlBytes(control{Type: "rewind_ack", NextChunk: message.NextChunk}))
+		}
 	case "chunk_size_change":
 		if role != transfer.SenderRole {
 			return

@@ -238,7 +238,7 @@ function Home() {
                 )}
               </div>
 
-              <div className="actions">
+<div className="actions">
                 <button className="secondary" onClick={() => input.current?.click()}>{translate('file.change')}</button>
                 <button onClick={() => void create()} disabled={busy}>{busy ? translate('create.fileHashing') : translate('create.file')}</button>
               </div>
@@ -390,6 +390,8 @@ function Sender() {
   const [extending, setExtending] = useState(false);
   const remainingMs = expiresAt ? Math.max(0, Date.parse(expiresAt) - clock) : undefined;
   const fmtCountdown = (ms: number) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+  const transportRef = useRef<TransferTransport | undefined>(undefined);
 
   useEffect(() => {
     if (!expiresAt) return;
@@ -584,10 +586,17 @@ function Sender() {
               </p>
             )}
             <p className="waiting" role="status" aria-live="polite">
-              {error ? `! ${error}` : waiting ? translate('status.waiting') : progress < 1 ? translate('status.sending') : translate('status.complete')}
-            </p>
-            {renderBadge()}
-          </div>
+                {error ? `! ${error}` : waiting ? translate('status.waiting') : progress < 1 ? translate('status.sending') : translate('status.complete')}
+              </p>
+              {renderBadge()}
+              {!waiting && progress < 1 && (
+                <div className="actions" style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+                  <button className="secondary" onClick={() => transportRef.current?.pause?.()}>{translate('action.pause')}</button>
+                  <button className="secondary" style={{ background: '#b13a2a', borderColor: '#b13a2a' }} onClick={() => transportRef.current?.close()}>{translate('action.cancel')}</button>
+                </div>
+              )}
+              {renderBadge()}
+            </div>
         </div>
         {!waiting && <Progress value={progress} file={{ name: file.name, fileSize: file.size }} />}
         
@@ -784,7 +793,7 @@ function Receiver() {
     return null;
   };
 
-  return (
+return (
     <Shell>
       <section className="hero compact">
         <p className="eyebrow">{translate('receive.incoming')}</p>
@@ -803,22 +812,26 @@ function Receiver() {
               <>
                 <Progress value={progress} file={{ name: metadata.fileName, fileSize: metadata.fileSize }} />
                 <p className="muted" style={{ marginTop: '12px' }} role="status" aria-live="polite">{statusLabel(state)}</p>
+                {transportRef.current && (state === 'Receiving…' || state === 'Transferring') && (
+                  <div className="actions" style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+                    <button className="secondary" onClick={() => transportRef.current?.pause?.()}>{translate('action.pause')}</button>
+                  </div>
+                )}
                 {renderBadge()}
               </>
             )}
-            
-            <DiagnosticsPanel 
-              mode={metadata?.transport as TransportMode || 'auto'}
-              activeMode={activeMode}
-              status={transportStatus}
-              iceState={iceState}
-              dcState={dcState}
-              fallbackReason={fallbackReason}
-            />
           </div>
         ) : (
           <div className="card message">{statusLabel(state)}</div>
         )}
+        <DiagnosticsPanel 
+          mode={metadata?.transport as TransportMode || 'auto'}
+          activeMode={activeMode}
+          status={transportStatus}
+          iceState={iceState}
+          dcState={dcState}
+          fallbackReason={fallbackReason}
+        />
       </section>
     </Shell>
   );

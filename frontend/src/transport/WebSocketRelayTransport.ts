@@ -341,6 +341,14 @@ export class WebSocketRelayTransport implements TransferTransport {
     this.updateStatus('completed');
   }
 
+  pause(): void {
+    this.client?.send({ type: 'pause' });
+  }
+
+  rewind(fromChunk: number): void {
+    this.client?.send({ type: 'rewind', nextChunk: fromChunk });
+  }
+
   private updateStatus(status: TransportStatus) {
     this.status = status;
     if (this.statusCallback) {

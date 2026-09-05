@@ -89,6 +89,8 @@ const en: Record<string, string> = {
   'sender.readyEyebrow': 'TRANSFER READY',
   'sender.shareTitle': 'Share the bridge.',
   'sender.yourLink': 'YOUR LINK',
+  'action.pause': 'Pause',
+  'action.cancel': 'Cancel',
 };
 
 export default en;

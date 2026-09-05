@@ -213,6 +213,14 @@ export class AutoTransport implements TransferTransport {
     this.updateStatus('completed', this.currentActiveTransportMode);
   }
 
+  pause(): void {
+    this.activeTransport?.pause?.();
+  }
+
+  rewind(fromChunk: number): void {
+    this.activeTransport?.rewind?.(fromChunk);
+  }
+
   private updateStatus(status: TransportStatus, mode: TransportMode) {
     this.status = status;
     if (this.statusCallback) {

@@ -378,6 +378,35 @@ func (manager *Manager) Cancel(id string) (*Session, error) {
 	return session, nil
 }
 
+func (manager *Manager) Pause(id string) (*Session, error) {
+	session, err := manager.getActive(id)
+	if err != nil {
+		return nil, err
+	}
+	session.Mu.Lock()
+	defer session.Mu.Unlock()
+	if err := transition(&session.State, Paused); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+func (manager *Manager) Rewind(id string, fromChunk uint64) (*Session, error) {
+	session, err := manager.getActive(id)
+	if err != nil {
+		return nil, err
+	}
+	session.Mu.Lock()
+	defer session.Mu.Unlock()
+	if session.State != Transferring && session.State != Paused {
+		return nil, ErrInvalidState
+	}
+	if fromChunk < session.NextChunk {
+		session.NextChunk = fromChunk
+	}
+	return session, nil
+}
+
 func (manager *Manager) Extend(id string, now time.Time) (time.Time, error) {
 	session, ok := manager.Get(id)
 	if !ok {
