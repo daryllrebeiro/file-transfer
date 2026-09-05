@@ -29,7 +29,7 @@ test('sender transfers a multi-chunk file over the server relay', async ({ page 
 
   await receiver.getByRole('button', { name: 'Download file' }).click();
   await expect(page.getByText('Transfer complete')).toBeVisible({ timeout: 30_000 });
-  await expect(receiver.getByText('Download complete')).toBeVisible({ timeout: 30_000 });
+  await expect(receiver.getByRole('heading', { name: 'File received.' })).toBeVisible({ timeout: 30_000 });
 
   const received = await receiver.evaluate(async () => {
     const parts = (window as any).__relayReceived as Uint8Array[];

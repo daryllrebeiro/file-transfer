@@ -79,6 +79,18 @@ function Home() {
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sharedTitle = params.get('title') || '';
+    const sharedText = params.get('text') || '';
+    if (sharedTitle || sharedText) {
+      const combined = [sharedTitle, sharedText].filter(Boolean).join('\n').slice(0, textLimit);
+      setText(combined);
+      setSendMode('text');
+      window.history.replaceState({}, '', '/');
+    }
+  }, []);
+
   const handleSelectTransport = (mode: TransportMode) => {
     if (!supportsWebRTC && mode !== 'relay') return;
     setTransportMode(mode);

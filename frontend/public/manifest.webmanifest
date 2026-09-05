@@ -1,0 +1,21 @@
+{
+  "name": "relay — Temporary file transfer",
+  "short_name": "relay",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#101918",
+  "theme_color": "#101918",
+  "description": "A fast, temporary bridge between your devices. Files stream through memory only. Nothing is permanently stored.",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ],
+  "share_target": {
+    "action": "/",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  }
+}
