@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  IMAGE: relay-backend
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/relay-backend/relay-backend
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - uses: docker/setup-buildx-action@v3
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Deploy staging to Cloud Run
+        run: |
+          gcloud run deploy relay-backend-staging \
+            --image "${{ steps.meta.outputs.tags }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --allow-unauthenticated \
+            --cpu 1 --memory 512Mi \
+            --min-instances 0 --max-instances 1 \
+            --port 8080 \
+            --set-env-vars "PORT=8080,PUBLIC_BASE_URL=${{ vars.GCP_STAGING_URL }},ALLOWED_ORIGINS=${{ vars.GCP_STAGING_ORIGIN }},TRANSFER_TTL=15m,MAX_FILE_SIZE=10737418240,MAX_CHUNK_SIZE=2097152,MAX_ACTIVE_TRANSFERS=1000,MAX_CONNECTIONS=2000,CREATE_RATE_PER_MINUTE=20,TRUST_PROXY=true,WRITE_TIMEOUT=5m,METRICS_FORMAT=prometheus" \
+            --quiet
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV" ]; then RANGE="$PREV..HEAD"; else RANGE="HEAD"; fi
+          { echo "NOTES<<EOF"; git log --oneline --no-merges "$RANGE"; echo "EOF"; } >> "$GITHUB_ENV"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: false
+          body: "${{ env.NOTES }}"
+          draft: false
+          prerelease: false
