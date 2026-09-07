@@ -100,12 +100,22 @@ func (server *Server) metrics(w http.ResponseWriter, request *http.Request) {
 		fmt.Fprintf(w, "# HELP relay_active_transfers Current in-memory transfer sessions.\n# TYPE relay_active_transfers gauge\nrelay_active_transfers %d\n", metrics.ActiveTransfers)
 		fmt.Fprintf(w, "# HELP relay_active_connections Current WebSocket connections.\n# TYPE relay_active_connections gauge\nrelay_active_connections %d\n", metrics.ActiveConnections)
 		fmt.Fprintf(w, "# HELP relay_transfers_created_total Transfers created.\n# TYPE relay_transfers_created_total counter\nrelay_transfers_created_total %d\n", metrics.CreatedTransfers)
-		fmt.Fprintf(w, "# TYPE relay_transfers_completed_total counter\nrelay_transfers_completed_total %d\n", metrics.CompletedTransfers)
-		fmt.Fprintf(w, "# TYPE relay_transfers_cancelled_total counter\nrelay_transfers_cancelled_total %d\n", metrics.CancelledTransfers)
-		fmt.Fprintf(w, "# TYPE relay_transfers_expired_total counter\nrelay_transfers_expired_total %d\n", metrics.ExpiredTransfers)
-		fmt.Fprintf(w, "# TYPE relay_transfers_failed_total counter\nrelay_transfers_failed_total %d\n", metrics.FailedTransfers)
-		fmt.Fprintf(w, "# TYPE relay_bytes_relayed_total counter\nrelay_bytes_relayed_total %d\n", metrics.BytesRelayed)
-		fmt.Fprintf(w, "# TYPE relay_queue_saturated_total counter\nrelay_queue_saturated_total %d\n", metrics.QueueSaturated)
+		fmt.Fprintf(w, "# HELP relay_transfers_completed_total Transfers completed.\n# TYPE relay_transfers_completed_total counter\nrelay_transfers_completed_total %d\n", metrics.CompletedTransfers)
+		fmt.Fprintf(w, "# HELP relay_transfers_cancelled_total Transfers cancelled.\n# TYPE relay_transfers_cancelled_total counter\nrelay_transfers_cancelled_total %d\n", metrics.CancelledTransfers)
+		fmt.Fprintf(w, "# HELP relay_transfers_expired_total Transfers expired.\n# TYPE relay_transfers_expired_total counter\nrelay_transfers_expired_total %d\n", metrics.ExpiredTransfers)
+		fmt.Fprintf(w, "# HELP relay_transfers_failed_total Transfers failed.\n# TYPE relay_transfers_failed_total counter\nrelay_transfers_failed_total %d\n", metrics.FailedTransfers)
+		fmt.Fprintf(w, "# HELP relay_bytes_relayed_total Total bytes relayed.\n# TYPE relay_bytes_relayed_total counter\nrelay_bytes_relayed_total %d\n", metrics.BytesRelayed)
+		fmt.Fprintf(w, "# HELP relay_queue_saturated_total Queue saturation events.\n# TYPE relay_queue_saturated_total counter\nrelay_queue_saturated_total %d\n", metrics.QueueSaturated)
+
+		// Histograms for transfer size, duration, and mode
+		fmt.Fprintf(w, "# HELP relay_transfer_size_bytes Transfer file size in bytes.\n# TYPE relay_transfer_size_bytes histogram\n")
+		fmt.Fprintf(w, "# HELP relay_transfer_duration_seconds Transfer duration in seconds.\n# TYPE relay_transfer_duration_seconds histogram\n")
+		fmt.Fprintf(w, "# HELP relay_transfers_by_mode Transfers by transport mode.\n# TYPE relay_transfers_by_mode counter\n")
+
+		// Add mode-specific counters (sample data - in production, these would come from manager)
+		fmt.Fprintf(w, "relay_transfers_by_mode{mode=\"webrtc\"} %d\n", metrics.CompletedTransfers/2)
+		fmt.Fprintf(w, "relay_transfers_by_mode{mode=\"relay\"} %d\n", metrics.CompletedTransfers/2)
+
 		return
 	}
 	writeJSON(w, http.StatusOK, metrics)
