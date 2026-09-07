@@ -170,6 +170,12 @@ func (server *Server) create(w http.ResponseWriter, request *http.Request) {
 		tracing.WithAttributes(attribute.String("client_ip", server.clientIP(request))))
 	defer span.End()
 
+	if server.Manager.IsDraining() {
+		w.Header().Set("Retry-After", "30")
+		http.Error(w, "server is draining, please retry later", http.StatusServiceUnavailable)
+		return
+	}
+
 	if request.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

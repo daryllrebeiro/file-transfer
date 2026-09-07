@@ -63,7 +63,17 @@ func main() {
 	go cleanup(stop, manager)
 	go func() {
 		<-stop.Done()
-		slog.Info("shutting down: draining connections")
+		slog.Info("shutting down: entering draining mode")
+		manager.SetDraining(true)
+
+		slog.Info("waiting for active transfers to complete")
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer drainCancel()
+		if err := manager.WaitForDrain(drainCtx); err != nil {
+			slog.Warn("drain timeout or cancelled", "error", err)
+		}
+
+		slog.Info("draining connections")
 		manager.Shutdown()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

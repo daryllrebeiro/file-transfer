@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -67,6 +68,7 @@ type Manager struct {
 	bytesRelayed       atomic.Uint64
 	queueSaturated     atomic.Uint64
 	redisStore         *RedisStore
+	draining           atomic.Bool
 }
 
 type Metrics struct {
@@ -346,6 +348,40 @@ func (manager *Manager) Metrics() Metrics {
 	activeConnections := manager.connections
 	manager.mu.RUnlock()
 	return Metrics{ActiveTransfers: activeTransfers, ActiveConnections: activeConnections, CreatedTransfers: manager.created.Load(), CompletedTransfers: manager.completed.Load(), CancelledTransfers: manager.cancelled.Load(), ExpiredTransfers: manager.expired.Load(), FailedTransfers: manager.failed.Load(), BytesRelayed: manager.bytesRelayed.Load(), QueueSaturated: manager.queueSaturated.Load()}
+}
+
+func (manager *Manager) SetDraining(draining bool) {
+	manager.draining.Store(draining)
+}
+
+func (manager *Manager) IsDraining() bool {
+	return manager.draining.Load()
+}
+
+func (manager *Manager) ActiveTransferCount() int {
+	count := 0
+	for index := range manager.shards {
+		shard := &manager.shards[index]
+		shard.mu.RLock()
+		count += len(shard.sessions)
+		shard.mu.RUnlock()
+	}
+	return count
+}
+
+func (manager *Manager) WaitForDrain(ctx context.Context) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if manager.ActiveTransferCount() == 0 {
+				return nil
+			}
+		}
+	}
 }
 
 func (manager *Manager) Get(id string) (*Session, bool) {
