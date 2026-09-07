@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"file-transfer/backend/internal/config"
+	"file-transfer/backend/internal/tracing"
 	"file-transfer/backend/internal/transfer"
 	"file-transfer/backend/internal/turn"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Server struct {
@@ -163,6 +166,10 @@ func (server *Server) healthCheck(w http.ResponseWriter, request *http.Request) 
 	})
 }
 func (server *Server) create(w http.ResponseWriter, request *http.Request) {
+	_, span := tracing.StartSpan(request.Context(), "httpapi.create",
+		tracing.WithAttributes(attribute.String("client_ip", server.clientIP(request))))
+	defer span.End()
+
 	if request.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -189,6 +196,7 @@ func (server *Server) create(w http.ResponseWriter, request *http.Request) {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, request.Body, 64<<10))
 	if err := decoder.Decode(&metadata); err != nil {
 		http.Error(w, "invalid metadata", http.StatusBadRequest)
+		tracing.RecordError(span, err)
 		return
 	}
 	session, tokens, err := server.Manager.CreateWithTokens(metadata)
@@ -208,8 +216,10 @@ func (server *Server) create(w http.ResponseWriter, request *http.Request) {
 			return
 		}
 		http.Error(w, message, http.StatusBadRequest)
+		tracing.RecordError(span, err)
 		return
 	}
+	span.SetAttributes(attribute.String("transfer_id", session.ID))
 	receiverURL := strings.TrimRight(server.BaseURL, "/") + "/receive/" + session.ID + "#token=" + tokens.ReceiverToken
 	writeJSON(w, http.StatusCreated, map[string]interface{}{"id": session.ID, "expiresAt": session.ExpiresAt, "url": receiverURL, "senderToken": tokens.SenderToken})
 }
