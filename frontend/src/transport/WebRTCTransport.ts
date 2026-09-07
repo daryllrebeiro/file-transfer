@@ -2,18 +2,32 @@ import { TransferTransport, ReceivedChunk, TransferProgress, TransferError, Tran
 import { Metadata, Message } from '../types';
 import { TransferClient } from '../services/transferClient';
 import { logger } from '../services/logger';
+import { bufferPool } from './bufferPool';
 
 const SUB_CHUNK_SIZE = 60 * 1024; // 60KB sub-chunks to stay well within browser SCTP limits
+const FULL_CHUNK_SIZE = 2 * 1024 * 1024; // 2MB full chunk size
 
-function encodeSubChunk(chunkIndex: number, subIndex: number, totalSubChunks: number, payload: ArrayBuffer): ArrayBuffer {
-  const header = new ArrayBuffer(20 + payload.byteLength);
-  const view = new DataView(header);
+function encodeSubChunk(chunkIndex: number, subIndex: number, totalSubChunks: number, payload: Uint8Array, buffer: Uint8Array): ArrayBuffer {
+  const totalLength = 20 + payload.byteLength;
+  if (buffer.byteLength < totalLength) {
+    // Fallback if pooled buffer is too small
+    const fallback = new ArrayBuffer(totalLength);
+    const view = new DataView(fallback);
+    view.setBigUint64(0, BigInt(chunkIndex));
+    view.setUint32(8, subIndex);
+    view.setUint32(12, totalSubChunks);
+    view.setUint32(16, payload.byteLength);
+    new Uint8Array(fallback, 20).set(payload);
+    return fallback;
+  }
+  const view = new DataView(buffer.buffer, buffer.byteOffset, totalLength);
   view.setBigUint64(0, BigInt(chunkIndex));
   view.setUint32(8, subIndex);
   view.setUint32(12, totalSubChunks);
   view.setUint32(16, payload.byteLength);
-  new Uint8Array(header, 20).set(new Uint8Array(payload));
-  return header;
+  new Uint8Array(buffer.buffer, buffer.byteOffset + 20, payload.byteLength).set(payload);
+  // Return the exact frame slice - buffer will be released by caller
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + totalLength) as ArrayBuffer;
 }
 
 function parseSubChunk(buffer: ArrayBuffer) {
@@ -175,22 +189,40 @@ export class WebRTCTransport implements TransferTransport {
           assembly.subChunks[sub.subIndex] = { data: frame, length: sub.payloadLength };
           assembly.receivedCount++;
 
-          if (assembly.receivedCount === sub.totalSubChunks) {
-            // Reconstitute the full chunk with a single copy straight from the sub-frames.
-            const totalBytes = assembly.subChunks.reduce((acc, slot) => acc + (slot ? slot.length : 0), 0);
-            const fullBuffer = new Uint8Array(totalBytes);
-            let offset = 0;
-            for (const slot of assembly.subChunks) {
-              if (!slot) continue;
-              fullBuffer.set(new Uint8Array(slot.data, sub.payloadStart, slot.length), offset);
-              offset += slot.length;
-            }
-            this.receiveAssembly.delete(sub.chunkIndex);
-
-            if (this.chunkCallback) {
-              this.chunkCallback({ index: sub.chunkIndex, bytes: fullBuffer.buffer });
-            }
+if (assembly.receivedCount === sub.totalSubChunks) {
+        // Reconstitute the full chunk with a single copy straight from the sub-frames.
+        const totalBytes = assembly.subChunks.reduce((acc, slot) => acc + (slot ? slot.length : 0), 0);
+        const fullBuffer = bufferPool.acquireFullChunk();
+        if (fullBuffer.byteLength < totalBytes) {
+          // Fallback if pooled buffer is too small
+          const fallback = new Uint8Array(totalBytes);
+          let offset = 0;
+          for (const slot of assembly.subChunks) {
+            if (!slot) continue;
+            fallback.set(new Uint8Array(slot.data, sub.payloadStart, slot.length), offset);
+            offset += slot.length;
           }
+          this.receiveAssembly.delete(sub.chunkIndex);
+          if (this.chunkCallback) {
+            this.chunkCallback({ index: sub.chunkIndex, bytes: fallback.buffer });
+          }
+        } else {
+          let offset = 0;
+          for (const slot of assembly.subChunks) {
+            if (!slot) continue;
+            fullBuffer.set(new Uint8Array(slot.data, sub.payloadStart, slot.length), offset);
+            offset += slot.length;
+          }
+          this.receiveAssembly.delete(sub.chunkIndex);
+
+          if (this.chunkCallback) {
+            this.chunkCallback({ index: sub.chunkIndex, bytes: fullBuffer.buffer.slice(fullBuffer.byteOffset, fullBuffer.byteOffset + totalBytes) as ArrayBuffer });
+          }
+          // Release the buffer back to pool after callback processes it
+          // Note: The callback may hold onto the buffer, so we release after a microtask
+          queueMicrotask(() => bufferPool.releaseFullChunk(fullBuffer));
+        }
+      }
         } catch (e) {
           logger.error('[WebRTCTransport] Error decoding WebRTC subchunk:', e);
           this.handleError('Failed to parse WebRTC binary frame');
@@ -244,12 +276,15 @@ export class WebRTCTransport implements TransferTransport {
 
     // Split the 2MB chunk into smaller SCTP MTU compliant sub-chunks (60KB)
     const totalSubChunks = Math.ceil(chunk.byteLength / SUB_CHUNK_SIZE);
+    const chunkBytes = new Uint8Array(chunk);
     
     for (let subIndex = 0; subIndex < totalSubChunks; subIndex++) {
       const offset = subIndex * SUB_CHUNK_SIZE;
-      const subPayload = chunk.slice(offset, Math.min(chunk.byteLength, offset + SUB_CHUNK_SIZE));
+      const subPayload = chunkBytes.subarray(offset, Math.min(chunk.byteLength, offset + SUB_CHUNK_SIZE));
       
-      const frame = encodeSubChunk(index, subIndex, totalSubChunks, subPayload);
+      // Acquire buffer from pool for this sub-chunk
+      const buffer = bufferPool.acquireSubChunk();
+      const frame = encodeSubChunk(index, subIndex, totalSubChunks, subPayload, buffer);
 
       // Backpressure Check: Low/High watermarks
       const BUFFER_THRESHOLD = 4 * 1024 * 1024; // 4MB low water
@@ -266,6 +301,9 @@ export class WebRTCTransport implements TransferTransport {
       }
 
       this.dataChannel.send(frame);
+      
+      // Release buffer back to pool after sending (dataChannel.send copies the data)
+      bufferPool.releaseSubChunk(buffer);
     }
 
     if (this.progressCallback && this.file) {
@@ -319,6 +357,7 @@ export class WebRTCTransport implements TransferTransport {
       this.pc.close();
     }
     this.receiveAssembly.clear();
+    bufferPool.clear();
   }
 
   getStatus(): TransportStatus {
@@ -345,11 +384,21 @@ export class WebRTCTransport implements TransferTransport {
     logger.debug('[WebRTCTransport] complete() called');
     if (this.dataChannel && this.dataChannel.readyState === 'open') {
       logger.debug('[WebRTCTransport] Sending transfer_complete over DataChannel...');
-      const controlFrame = encodeSubChunk(0, 1, 0, new ArrayBuffer(0));
+      const buffer = bufferPool.acquireSubChunk();
+      const controlFrame = encodeSubChunk(0, 1, 0, new Uint8Array(0), buffer);
       this.dataChannel.send(controlFrame);
+      bufferPool.releaseSubChunk(buffer);
     }
     this.signaling.send({ type: 'transfer_complete' });
     this.updateStatus('completed');
+  }
+
+  pause(): void {
+    this.signaling.send({ type: 'pause' });
+  }
+
+  rewind(fromChunk: number): void {
+    this.signaling.send({ type: 'rewind', nextChunk: fromChunk });
   }
 
   private updateStatus(status: TransportStatus) {

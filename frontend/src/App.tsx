@@ -10,6 +10,7 @@ import { type TransferTransport } from './transport/TransferTransport';
 import { logger } from './services/logger';
 import { addHistory, clearHistory, getHistory, updateHistory, type HistoryEntry } from './services/history';
 import { locales, t, useLocale, useT, type Locale } from './i18n';
+import DevicePairingPanel from './components/DevicePairingPanel';
 
 const chunkSize = 2 * 1024 * 1024;
 const bytes = (value: number) => value < 1024 ** 2 ? `${(value / 1024).toFixed(1)} KB` : value < 1024 ** 3 ? `${(value / 1024 ** 2).toFixed(2)} MB` : `${(value / 1024 ** 3).toFixed(2)} GB`;
@@ -31,7 +32,8 @@ function Shell({ children }: { children: ReactNode }) {
   }, [theme]);
   const { locale, change } = useLocale();
   const translate = useT();
-  return <main><header><Link to="/" className="brand"><span>◈</span> relay</Link><span className="privacy">{translate('brand.tagline')}</span><span className="header-actions"><button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? translate('theme.toLight') : translate('theme.toDark')}>{theme === 'dark' ? translate('theme.light') : translate('theme.dark')}</button><select className="lang-select" aria-label={translate('lang.label')} value={locale} onChange={event => change(event.target.value as Locale)}>{locales.map(localeOption => <option key={localeOption} value={localeOption}>{localeOption.toUpperCase()}</option>)}</select></span></header>{children}<footer>{translate('brand.footer')}</footer></main>;
+  const [showDevicePanel, setShowDevicePanel] = useState(false);
+  return <main><header><Link to="/" className="brand"><span>◈</span> relay</Link><span className="privacy">{translate('brand.tagline')}</span><span className="header-actions"><button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? translate('theme.toLight') : translate('theme.toDark')}>{theme === 'dark' ? translate('theme.light') : translate('theme.dark')}</button><button className="device-pairing-btn" onClick={() => setShowDevicePanel(!showDevicePanel)} aria-label="Device Pairing" style={{ marginLeft: 8, padding: '6px 10px', borderRadius: 6, border: '1px solid #3a4a47', background: '#1a2522', color: '#d4f25c', cursor: 'pointer', fontSize: 12 }}>{translate('header.devices')}</button><select className="lang-select" aria-label={translate('lang.label')} value={locale} onChange={event => change(event.target.value as Locale)}>{locales.map(localeOption => <option key={localeOption} value={localeOption}>{localeOption.toUpperCase()}</option>)}</select></span></header>{children}<footer>{translate('brand.footer')}</footer></main>;
 }
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
@@ -65,11 +67,12 @@ function Home() {
     if (saved === 'webrtc' || saved === 'relay' || saved === 'auto') return saved;
     return (import.meta.env.VITE_DEFAULT_TRANSPORT as TransportMode) || 'auto';
   };
-  const [transportMode, setTransportMode] = useState<TransportMode>(getInitialTransport());
+const [transportMode, setTransportMode] = useState<TransportMode>(getInitialTransport());
   const [history, setHistory] = useState<HistoryEntry[]>(() => getHistory());
   const [sendMode, setSendMode] = useState<'file' | 'text'>('file');
   const [text, setText] = useState('');
   const textLimit = 64 * 1024;
+  const [showDevicePanel, setShowDevicePanel] = useState(false);
 
   const choose = (selected?: File) => { if (selected) { setFile(selected); setSendMode('file'); } };
 
@@ -292,11 +295,12 @@ function Home() {
                   </li>
                 );
               })}
-            </ul>
+</ul>
           </section>
         )}
+        {showDevicePanel && <DevicePairingPanel onClose={() => setShowDevicePanel(false)} />}
       </section>
-    </Shell>
+      </Shell>
   );
 }
 
@@ -753,10 +757,10 @@ function Receiver() {
     logger.debug('[Receiver] File verified. Saving...');
     await sink.current?.close();
     if (sink.current?.blobParts) {
-      const blob = new Blob(received.current, { type: current.mimeType });
+      const blob = new Blob(received.current, { type: current.mimeType || 'application/octet-stream' });
       const anchor = document.createElement('a');
       anchor.href = URL.createObjectURL(blob);
-      anchor.download = current.fileName;
+      anchor.download = current.fileName || 'download';
       anchor.click();
     }
     setProgress(1);
@@ -767,7 +771,7 @@ function Receiver() {
     const current = metadata;
     if (!current || !transportRef.current) return;
     try {
-      sink.current = await createReceiverSink(current.fileName, current.mimeType, current.fileSize);
+      sink.current = await createReceiverSink(current.fileName || 'download', current.mimeType || 'application/octet-stream', current.fileSize || 0);
       transportRef.current.accept?.();
       setState('Receiving…');
     } catch (reason) {
@@ -801,8 +805,8 @@ return (
         {metadata ? (
           <div className="card receive-card">
             <div className="file-icon">↘</div>
-            <h2>{metadata.fileName}</h2>
-            <p>{bytes(metadata.fileSize)} <span className="muted">· {translate('receive.fromDevice')}</span></p>
+            <h2>{metadata.fileName || 'download'}</h2>
+            <p>{bytes(metadata.fileSize || 0)} <span className="muted">· {translate('receive.fromDevice')}</span></p>
             {state === 'Waiting for your approval' ? (
               <div className="actions">
                 <button onClick={() => void accept()}>{translate('receive.download')}</button>
@@ -810,7 +814,7 @@ return (
               </div>
             ) : (
               <>
-                <Progress value={progress} file={{ name: metadata.fileName, fileSize: metadata.fileSize }} />
+                <Progress value={progress} file={{ name: metadata.fileName || 'download', fileSize: metadata.fileSize || 0 }} />
                 <p className="muted" style={{ marginTop: '12px' }} role="status" aria-live="polite">{statusLabel(state)}</p>
                 {transportRef.current && (state === 'Receiving…' || state === 'Transferring') && (
                   <div className="actions" style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>

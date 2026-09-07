@@ -14,6 +14,7 @@ import (
 
 	"file-transfer/backend/internal/config"
 	"file-transfer/backend/internal/httpapi"
+	"file-transfer/backend/internal/signaling"
 	"file-transfer/backend/internal/transfer"
 	transferws "file-transfer/backend/internal/websocket"
 )
@@ -28,6 +29,19 @@ func main() {
 	manager := transfer.NewManager(settings.TransferTTL, settings.MaxFileSize, settings.MaxChunkSize)
 	manager.SetLimits(settings.MaxActiveTransfers, settings.MaxConnections)
 	api := &httpapi.Server{Manager: manager, BaseURL: settings.PublicBaseURL, CreateLimiter: httpapi.NewCreationLimiter(settings.CreateRatePerMinute), MetricsToken: settings.MetricsToken, MetricsFormat: settings.MetricsFormat, TrustProxy: settings.TrustProxy}
+
+	var signalPublisher transferws.SignalPublisher
+	if settings.RedisEnabled {
+		redisSignaling, err := signaling.NewRedisSignaling(settings.RedisURL, slog.Default())
+		if err != nil {
+			slog.Error("Failed to initialize Redis signaling", "error", err)
+			os.Exit(1)
+		}
+		defer redisSignaling.Close()
+		signalPublisher = redisSignaling
+		slog.Info("Redis signaling enabled", "url", settings.RedisURL)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/api/", httpapi.SecurityHeaders(httpapi.CORS(settings.AllowedOrigins, api.Routes())))
 	mux.Handle("/healthz", httpapi.SecurityHeaders(api.Routes()))
@@ -36,7 +50,7 @@ func main() {
 	for _, origin := range settings.AllowedOrigins {
 		allowed[origin] = true
 	}
-	mux.Handle("/ws/", httpapi.SecurityHeaders(transferws.NewHandler(manager, allowed)))
+	mux.Handle("/ws/", httpapi.SecurityHeaders(transferws.NewHandler(manager, allowed, signalPublisher)))
 	server := &http.Server{Addr: "0.0.0.0:" + settings.Port, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: settings.WriteTimeout, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 32 << 10}
 	slog.Info("server listening", "addr", server.Addr)
 	stop, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

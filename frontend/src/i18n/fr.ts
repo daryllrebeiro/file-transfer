@@ -77,6 +77,17 @@ const fr: Record<string, string> = {
   'errorBoundary.title': 'Une erreur est survenue',
   'errorBoundary.text': 'Rechargez cette page ou démarrez un nouveau transfert.',
   'startOver': 'Recommencer',
+  'action.pause': 'Pause',
+  'action.cancel': 'Annuler',
+  'password.enable': '🔒 Chiffrer avec mot de passe',
+  'password.label': 'Mot de passe',
+  'password.placeholder': 'Entrez le mot de passe (min 8 car.)',
+  'password.show': 'Afficher',
+  'password.hide': 'Masquer',
+  'password.hint': 'AES-256-GCM + PBKDF2(250k). Le mot de passe ne quitte jamais cet appareil. Le destinataire doit entrer le même mot de passe pour télécharger.',
+  'password.tooShort': 'Le mot de passe doit contenir au moins 8 caractères.',
+  'password.enter': 'Entrez le mot de passe pour déchiffrer',
+  'password.wrong': 'Mot de passe incorrect. Veuillez réessayer.',
 };
 
 export default fr;

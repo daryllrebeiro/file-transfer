@@ -77,6 +77,17 @@ const de: Record<string, string> = {
   'errorBoundary.title': 'Etwas ist schiefgelaufen',
   'errorBoundary.text': 'Lade diese Seite neu oder starte eine neue Übertragung.',
   'startOver': 'Neu beginnen',
+  'action.pause': 'Pause',
+  'action.cancel': 'Abbrechen',
+  'password.enable': '🔒 Mit Passwort verschlüsseln',
+  'password.label': 'Passwort',
+  'password.placeholder': 'Passwort eingeben (mind. 8 Zeichen)',
+  'password.show': 'Anzeigen',
+  'password.hide': 'Verbergen',
+  'password.hint': 'AES-256-GCM + PBKDF2(250k). Das Passwort verlässt dieses Gerät nie. Der Empfänger muss dasselbe Passwort eingeben, um herunterzuladen.',
+  'password.tooShort': 'Das Passwort muss mindestens 8 Zeichen lang sein.',
+  'password.enter': 'Passwort zum Entschlüsseln eingeben',
+  'password.wrong': 'Falsches Passwort. Bitte versuchen Sie es erneut.',
 };
 
 export default de;

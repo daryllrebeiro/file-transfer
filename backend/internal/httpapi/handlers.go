@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"file-transfer/backend/internal/transfer"
+	"file-transfer/backend/internal/turn"
 )
 
 type Server struct {
@@ -22,6 +23,7 @@ type Server struct {
 	MetricsToken  string
 	MetricsFormat string
 	TrustProxy    bool
+	TurnHandler   *turn.TurnHandler
 }
 type CreationLimiter struct {
 	mu      sync.Mutex
@@ -76,6 +78,9 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/transfers", server.create)
 	mux.HandleFunc("/api/limits", server.limits)
 	mux.HandleFunc("/api/transfers/", server.transferRoutes)
+	if server.TurnHandler != nil {
+		mux.HandleFunc("/api/turn-credentials", server.turnCredentials)
+	}
 	return mux
 }
 func (server *Server) metrics(w http.ResponseWriter, request *http.Request) {
@@ -240,6 +245,31 @@ func (server *Server) clientIP(request *http.Request) string {
 		return host
 	}
 	return request.RemoteAddr
+}
+
+func (server *Server) turnCredentials(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Validate origin if configured
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		allowed := false
+		for _, o := range server.TurnHandler.Cfg.AllowedOrigins {
+			if o == "*" || o == origin {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			http.Error(w, "Origin not allowed", http.StatusForbidden)
+			return
+		}
+	}
+
+	server.TurnHandler.HandleCredentials(w, r)
 }
 func (server *Server) get(w http.ResponseWriter, request *http.Request) {
 	id := strings.TrimPrefix(request.URL.Path, "/api/transfers/")

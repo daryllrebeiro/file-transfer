@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +43,74 @@ type control struct {
 	Token      string `json:"token,omitempty"`
 	ChunkIndex uint64 `json:"chunkIndex"`
 	Message    string `json:"message,omitempty"`
+}
+
+type metrics struct {
+	latencies      []time.Duration
+	transferTimes  []time.Duration
+	bytesTransferred int64
+	mu             sync.Mutex
+}
+
+func (m *metrics) recordLatency(d time.Duration) {
+	m.mu.Lock()
+	m.latencies = append(m.latencies, d)
+	m.mu.Unlock()
+}
+
+func (m *metrics) recordTransferTime(d time.Duration) {
+	m.mu.Lock()
+	m.transferTimes = append(m.transferTimes, d)
+	m.mu.Unlock()
+}
+
+func (m *metrics) addBytes(n int64) {
+	atomic.AddInt64(&m.bytesTransferred, n)
+}
+
+func (m *metrics) percentile(p float64) time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.latencies) == 0 {
+		return 0
+	}
+	sort.Slice(m.latencies, func(i, j int) bool { return m.latencies[i] < m.latencies[j] })
+	idx := int(math.Ceil(p/100*float64(len(m.latencies)))) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(m.latencies) {
+		idx = len(m.latencies) - 1
+	}
+	return m.latencies[idx]
+}
+
+func (m *metrics) avgLatency() time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.latencies) == 0 {
+		return 0
+	}
+	var sum time.Duration
+	for _, d := range m.latencies {
+		sum += d
+	}
+	return sum / time.Duration(len(m.latencies))
+}
+
+func (m *metrics) printSummary(label string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.latencies) == 0 {
+		return
+	}
+	fmt.Printf("%s: count=%d avg=%s p50=%s p90=%s p95=%s p99=%s\n",
+		label, len(m.latencies),
+		m.avgLatency().Round(time.Millisecond),
+		m.percentile(50).Round(time.Millisecond),
+		m.percentile(90).Round(time.Millisecond),
+		m.percentile(95).Round(time.Millisecond),
+		m.percentile(99).Round(time.Millisecond))
 }
 
 func createSession(api string, fileSize int64, chunkSize int) (*createResponse, error) {

@@ -77,6 +77,17 @@ const es: Record<string, string> = {
   'errorBoundary.title': 'Algo salió mal',
   'errorBoundary.text': 'Recarga esta página o inicia una nueva transferencia.',
   'startOver': 'Empezar de nuevo',
+  'action.pause': 'Pausar',
+  'action.cancel': 'Cancelar',
+  'password.enable': '🔒 Cifrar con contraseña',
+  'password.label': 'Contraseña',
+  'password.placeholder': 'Introduce la contraseña (mín. 8 car.)',
+  'password.show': 'Mostrar',
+  'password.hide': 'Ocultar',
+  'password.hint': 'AES-256-GCM + PBKDF2(250k). La contraseña nunca sale de este dispositivo. El destinatario debe introducir la misma contraseña para descargar.',
+  'password.tooShort': 'La contraseña debe tener al menos 8 caracteres.',
+  'password.enter': 'Introduce la contraseña para descifrar',
+  'password.wrong': 'Contraseña incorrecta. Inténtalo de nuevo.',
 };
 
 export default es;

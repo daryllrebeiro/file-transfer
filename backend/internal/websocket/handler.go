@@ -31,16 +31,22 @@ const (
 	peerQueueSize  = 4
 )
 
-type Handler struct {
-	Manager        *transfer.Manager
-	AllowedOrigins map[string]bool
-	upgrader       ws.Upgrader
+type SignalPublisher interface {
+	Publish(transferID, msgType string, payload interface{}) error
 }
 
-func NewHandler(manager *transfer.Manager, allowedOrigins map[string]bool) *Handler {
+type Handler struct {
+	Manager         *transfer.Manager
+	AllowedOrigins  map[string]bool
+	upgrader        ws.Upgrader
+	signalPublisher SignalPublisher
+}
+
+func NewHandler(manager *transfer.Manager, allowedOrigins map[string]bool, signalPublisher SignalPublisher) *Handler {
 	return &Handler{
-		Manager:        manager,
-		AllowedOrigins: allowedOrigins,
+		Manager:         manager,
+		AllowedOrigins:  allowedOrigins,
+		signalPublisher: signalPublisher,
 		upgrader: ws.Upgrader{
 			ReadBufferSize:  32 << 10,
 			WriteBufferSize: 32 << 10,
@@ -67,6 +73,7 @@ type control struct {
 	Candidate     interface{}       `json:"candidate,omitempty"`
 	SdpMid        string            `json:"sdpMid,omitempty"`
 	SdpMLineIndex *int              `json:"sdpMLineIndex,omitempty"`
+	Features      []string          `json:"features,omitempty"`
 }
 type outbound struct {
 	kind int
@@ -217,14 +224,18 @@ func (handler *Handler) join(peer *peer, id string, connID string) (transfer.Rol
 	if err != nil {
 		return "", err
 	}
-	if err := peer.SendControl(controlBytes(control{Type: "transfer_offer", Metadata: session.Snapshot().Metadata, NextChunk: nextChunk})); err != nil {
+	snapshot := session.Snapshot()
+	features := snapshot.Metadata.Features
+	if err := peer.SendControl(controlBytes(control{Type: "transfer_offer", Metadata: snapshot.Metadata, NextChunk: nextChunk, Features: features})); err != nil {
 		return "", err
 	}
+	handler.publishSignal(id, "offer", snapshot.Metadata)
 	if role == transfer.ReceiverRole {
 		sender, _, connected := handler.Manager.Connections(id)
 		if connected && sender != nil {
 			_ = sender.SendControl(controlBytes(control{Type: "receiver_connected"}))
 		}
+		handler.publishSignal(id, "receiver_connected", nil)
 	}
 	return role, nil
 }
@@ -280,6 +291,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if ok && sender != nil {
 			_ = sender.SendControl(controlBytes(control{Type: "transfer_accepted", Metadata: session.Snapshot().Metadata}))
 		}
+		handler.publishSignal(id, "transfer_accepted", session.Snapshot().Metadata)
 	case "transfer_complete":
 		if role != transfer.SenderRole {
 			return
@@ -293,6 +305,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if ok && receiver != nil {
 			_ = receiver.SendControl(controlBytes(control{Type: "transfer_complete"}))
 		}
+		handler.publishSignal(id, "transfer_complete", nil)
 	case "reject_transfer", "transfer_cancelled":
 		if _, err := handler.Manager.Cancel(id); err != nil {
 			return
@@ -316,6 +329,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if receiver != nil {
 			_ = receiver.Close()
 		}
+		handler.publishSignal(id, "transfer_cancelled", nil)
 	case "pause":
 		if role != transfer.ReceiverRole {
 			return
@@ -327,6 +341,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if ok && sender != nil {
 			_ = sender.SendControl(controlBytes(control{Type: "paused"}))
 		}
+		handler.publishSignal(id, "pause", nil)
 	case "rewind":
 		if role != transfer.ReceiverRole {
 			return
@@ -338,6 +353,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if ok && sender != nil {
 			_ = sender.SendControl(controlBytes(control{Type: "rewind_ack", NextChunk: message.NextChunk}))
 		}
+		handler.publishSignal(id, "rewind", map[string]uint64{"nextChunk": message.NextChunk})
 	case "chunk_size_change":
 		if role != transfer.SenderRole {
 			return
@@ -345,6 +361,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if err := handler.Manager.AdjustChunkSize(id, message.ChunkSize); err != nil {
 			return
 		}
+		handler.publishSignal(id, "chunk_size_change", map[string]int{"chunkSize": message.ChunkSize})
 	case "webrtc_offer":
 		if role != transfer.SenderRole {
 			return
@@ -353,6 +370,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if ok && receiver != nil {
 			_ = receiver.SendControl(controlBytes(message))
 		}
+		handler.publishSignal(id, "webrtc_offer", message)
 	case "webrtc_answer":
 		if role != transfer.ReceiverRole {
 			return
@@ -361,6 +379,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		if ok && sender != nil {
 			_ = sender.SendControl(controlBytes(message))
 		}
+		handler.publishSignal(id, "webrtc_answer", message)
 	case "webrtc_ice_candidate":
 		sender, receiver, ok := handler.Manager.Connections(id)
 		if !ok {
@@ -371,6 +390,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 		} else if role == transfer.ReceiverRole && sender != nil {
 			_ = sender.SendControl(controlBytes(message))
 		}
+		handler.publishSignal(id, "ice_candidate", message)
 	case "webrtc_connected":
 		session, ok := handler.Manager.Get(id)
 		if ok {
@@ -401,6 +421,7 @@ func (handler *Handler) control(id string, role transfer.Role, message control) 
 				_ = sender.SendControl(controlBytes(message))
 			}
 		}
+		handler.publishSignal(id, "webrtc_fallback", nil)
 	}
 }
 func (handler *Handler) detach(id string, role transfer.Role, peer transfer.Peer) {
@@ -423,7 +444,15 @@ func (handler *Handler) detach(id string, role transfer.Role, peer transfer.Peer
 	if role == transfer.ReceiverRole && sender != nil {
 		_ = sender.SendControl(message)
 	}
+	handler.publishSignal(id, messageType, nil)
 }
+
+func (handler *Handler) publishSignal(transferID, msgType string, payload interface{}) {
+	if handler.signalPublisher != nil {
+		_ = handler.signalPublisher.Publish(transferID, msgType, payload)
+	}
+}
+
 func controlBytes(message control) []byte { data, _ := json.Marshal(message); return data }
 func friendlyError(err error) string {
 	switch {

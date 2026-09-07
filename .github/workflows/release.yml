@@ -64,16 +64,8 @@ jobs:
             --set-env-vars "PORT=8080,PUBLIC_BASE_URL=${{ vars.GCP_STAGING_URL }},ALLOWED_ORIGINS=${{ vars.GCP_STAGING_ORIGIN }},TRANSFER_TTL=15m,MAX_FILE_SIZE=10737418240,MAX_CHUNK_SIZE=2097152,MAX_ACTIVE_TRANSFERS=1000,MAX_CONNECTIONS=2000,CREATE_RATE_PER_MINUTE=20,TRUST_PROXY=true,WRITE_TIMEOUT=5m,METRICS_FORMAT=prometheus" \
             --quiet
 
-      - name: Generate release notes
-        id: notes
-        run: |
-          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$PREV" ]; then RANGE="$PREV..HEAD"; else RANGE="HEAD"; fi
-          { echo "NOTES<<EOF"; git log --oneline --no-merges "$RANGE"; echo "EOF"; } >> "$GITHUB_ENV"
-
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: false
-          body: "${{ env.NOTES }}"
+          generate_release_notes: true
           draft: false
           prerelease: false

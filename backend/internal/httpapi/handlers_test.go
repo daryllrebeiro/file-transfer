@@ -197,3 +197,90 @@ func TestManagerExtendRejectsTerminalState(t *testing.T) {
 	}
 	_ = tokens
 }
+
+func TestCreationLimiterBoundaryAtLimit(t *testing.T) {
+	limiter := NewCreationLimiter(3)
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	// First request
+	r1 := limiter.Check("client", now)
+	if !r1.Allowed || r1.Remaining != 2 || r1.Limit != 3 {
+		t.Fatalf("first: %+v", r1)
+	}
+
+	// Second request
+	r2 := limiter.Check("client", now.Add(1*time.Second))
+	if !r2.Allowed || r2.Remaining != 1 {
+		t.Fatalf("second: %+v", r2)
+	}
+
+	// Third request - exactly at limit
+	r3 := limiter.Check("client", now.Add(2*time.Second))
+	if !r3.Allowed || r3.Remaining != 0 {
+		t.Fatalf("third (at limit): %+v", r3)
+	}
+
+	// Fourth request - over limit
+	r4 := limiter.Check("client", now.Add(3*time.Second))
+	if r4.Allowed || r4.Remaining != 0 || r4.RetryAfter <= 0 {
+		t.Fatalf("fourth (over limit): %+v", r4)
+	}
+}
+
+func TestCreationLimiterWindowReset(t *testing.T) {
+	limiter := NewCreationLimiter(2)
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	// Use up the limit
+	r1 := limiter.Check("client", now)
+	if !r1.Allowed {
+		t.Fatalf("first should be allowed: %+v", r1)
+	}
+	r2 := limiter.Check("client", now.Add(1*time.Second))
+	if !r2.Allowed {
+		t.Fatalf("second should be allowed: %+v", r2)
+	}
+
+	// Third should be blocked
+	r3 := limiter.Check("client", now.Add(2*time.Second))
+	if r3.Allowed {
+		t.Fatalf("third should be blocked: %+v", r3)
+	}
+
+	// After window resets (1 minute + 1 second), should be allowed again
+	r4 := limiter.Check("client", now.Add(time.Minute+1*time.Second))
+	if !r4.Allowed || r4.Remaining != 1 {
+		t.Fatalf("after window reset: %+v", r4)
+	}
+}
+
+func TestCreationLimiterSeparateClients(t *testing.T) {
+	limiter := NewCreationLimiter(1)
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	// Client A uses up limit
+	r1 := limiter.Check("client-a", now)
+	if !r1.Allowed {
+		t.Fatalf("client-a first: %+v", r1)
+	}
+	r2 := limiter.Check("client-a", now.Add(1*time.Second))
+	if r2.Allowed {
+		t.Fatalf("client-a second should be blocked: %+v", r2)
+	}
+
+	// Client B should have independent limit
+	r3 := limiter.Check("client-b", now.Add(1*time.Second))
+	if !r3.Allowed || r3.Remaining != 0 {
+		t.Fatalf("client-b first should be allowed: %+v", r3)
+	}
+}
+
+func TestCreationLimiterNilAndZeroLimit(t *testing.T) {
+	// nil limiter should allow everything
+	if !NewCreationLimiter(0).Check("client", time.Now()).Allowed {
+		t.Fatal("zero limit should allow all")
+	}
+	if !NewCreationLimiter(-1).Check("client", time.Now()).Allowed {
+		t.Fatal("negative limit should allow all")
+	}
+}

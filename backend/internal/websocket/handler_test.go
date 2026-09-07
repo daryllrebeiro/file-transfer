@@ -37,8 +37,8 @@ func (f *fakePeer) Close() error {
 }
 
 func newTestHandler() (*transfer.Manager, *Handler) {
-	manager := transfer.NewManager(time.Minute, 100, 10)
-	handler := NewHandler(manager, map[string]bool{"http://localhost:5173": true})
+	manager := transfer.NewManager(time.Minute, 10*1024*1024, 1024*1024)
+	handler := NewHandler(manager, map[string]bool{"http://localhost:5173": true}, nil)
 	return manager, handler
 }
 
@@ -364,4 +364,176 @@ func TestHandlerCancelPropagatesToBothPeers(t *testing.T) {
 
 	readMessageType(t, senderConn, "transfer_cancelled")
 	readMessageType(t, receiverConn, "transfer_cancelled")
+}
+
+func TestHandlerPauseAndRewind(t *testing.T) {
+	manager, handler := newTestHandler()
+	session, tokens, err := manager.CreateWithTokens(transfer.Metadata{FileName: "a.txt", FileSize: 100, ChunkSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	senderConn := dialWebSocket(t, handler, "/ws/"+session.ID)
+	defer senderConn.Close()
+	receiverConn := dialWebSocket(t, handler, "/ws/"+session.ID)
+	defer receiverConn.Close()
+
+	if err := senderConn.WriteJSON(map[string]string{"type": "sender_join", "transferId": session.ID, "token": tokens.SenderToken}); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiverConn.WriteJSON(map[string]string{"type": "receiver_join", "transferId": session.ID, "token": tokens.ReceiverToken}); err != nil {
+		t.Fatal(err)
+	}
+	for _, conn := range []*ws.Conn{senderConn, receiverConn} {
+		readMessageType(t, conn, "transfer_offer")
+	}
+
+	if err := receiverConn.WriteJSON(map[string]string{"type": "accept_transfer"}); err != nil {
+		t.Fatal(err)
+	}
+	readMessageType(t, senderConn, "transfer_accepted")
+
+	// Send a few chunks
+	for i := 0; i < 3; i++ {
+		frame := transfer.EncodeChunk(uint64(i), []byte("chunk-data"))
+		if err := senderConn.WriteMessage(ws.BinaryMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+		readJSON(t, senderConn, &map[string]interface{}{})
+		receiverConn.ReadMessage()
+	}
+
+	// Receiver pauses
+	if err := receiverConn.WriteJSON(map[string]interface{}{"type": "pause"}); err != nil {
+		t.Fatal(err)
+	}
+	readMessageType(t, senderConn, "paused")
+
+	// Receiver requests rewind to chunk 1
+	if err := receiverConn.WriteJSON(map[string]interface{}{"type": "rewind", "nextChunk": 1}); err != nil {
+		t.Fatal(err)
+	}
+	var rewindAck map[string]interface{}
+	readJSON(t, senderConn, &rewindAck)
+	if rewindAck["type"] != "rewind_ack" || rewindAck["nextChunk"] != float64(1) {
+		t.Fatalf("expected rewind_ack with nextChunk=1, got %v", rewindAck)
+	}
+
+	// Verify session state reflects rewind
+	s, _ := manager.Get(session.ID)
+	s.Mu.Lock()
+	if s.NextChunk != 1 {
+		t.Fatalf("expected NextChunk=1 after rewind, got %d", s.NextChunk)
+	}
+	s.Mu.Unlock()
+}
+
+func TestHandlerChunkSizeChange(t *testing.T) {
+	manager, handler := newTestHandler()
+	session, tokens, err := manager.CreateWithTokens(transfer.Metadata{FileName: "a.txt", FileSize: 1000, ChunkSize: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	senderConn := dialWebSocket(t, handler, "/ws/"+session.ID)
+	defer senderConn.Close()
+	receiverConn := dialWebSocket(t, handler, "/ws/"+session.ID)
+	defer receiverConn.Close()
+
+	if err := senderConn.WriteJSON(map[string]string{"type": "sender_join", "transferId": session.ID, "token": tokens.SenderToken}); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiverConn.WriteJSON(map[string]string{"type": "receiver_join", "transferId": session.ID, "token": tokens.ReceiverToken}); err != nil {
+		t.Fatal(err)
+	}
+	for _, conn := range []*ws.Conn{senderConn, receiverConn} {
+		readMessageType(t, conn, "transfer_offer")
+	}
+
+	if err := receiverConn.WriteJSON(map[string]string{"type": "accept_transfer"}); err != nil {
+		t.Fatal(err)
+	}
+	readMessageType(t, senderConn, "transfer_accepted")
+
+	// Sender requests chunk size change (must be >= MinChunkSize = 256KB)
+	newSize := 300 * 1024 // 300KB
+	if err := senderConn.WriteJSON(map[string]interface{}{"type": "chunk_size_change", "chunkSize": newSize}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Send a chunk with new size - should be accepted
+	frame := transfer.EncodeChunk(0, make([]byte, newSize))
+	if err := senderConn.WriteMessage(ws.BinaryMessage, frame); err != nil {
+		t.Fatal(err)
+	}
+	var ack map[string]interface{}
+	readJSON(t, senderConn, &ack)
+	if ack["type"] != "chunk_ack" {
+		t.Fatalf("expected chunk_ack after size change, got %v", ack["type"])
+	}
+
+	// Verify session metadata updated
+	s, _ := manager.Get(session.ID)
+	s.Mu.Lock()
+	if s.Metadata.ChunkSize != newSize {
+		t.Fatalf("expected chunkSize=%d, got %d", newSize, s.Metadata.ChunkSize)
+	}
+	s.Mu.Unlock()
+}
+
+func TestHandlerMultipleChunksOutOfOrder(t *testing.T) {
+	manager, handler := newTestHandler()
+	session, tokens, err := manager.CreateWithTokens(transfer.Metadata{FileName: "a.txt", FileSize: 1000, ChunkSize: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	senderConn := dialWebSocket(t, handler, "/ws/"+session.ID)
+	defer senderConn.Close()
+	receiverConn := dialWebSocket(t, handler, "/ws/"+session.ID)
+	defer receiverConn.Close()
+
+	if err := senderConn.WriteJSON(map[string]string{"type": "sender_join", "transferId": session.ID, "token": tokens.SenderToken}); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiverConn.WriteJSON(map[string]string{"type": "receiver_join", "transferId": session.ID, "token": tokens.ReceiverToken}); err != nil {
+		t.Fatal(err)
+	}
+	for _, conn := range []*ws.Conn{senderConn, receiverConn} {
+		readMessageType(t, conn, "transfer_offer")
+	}
+
+	if err := receiverConn.WriteJSON(map[string]string{"type": "accept_transfer"}); err != nil {
+		t.Fatal(err)
+	}
+	readMessageType(t, senderConn, "transfer_accepted")
+
+	// Send chunks out of order: 2, 0, 1 (within parallel window)
+	testData := []byte("test-data-12345678")
+	for _, idx := range []uint64{2, 0, 1} {
+		frame := transfer.EncodeChunk(idx, testData)
+		if err := senderConn.WriteMessage(ws.BinaryMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+		readJSON(t, senderConn, &map[string]interface{}{})
+	}
+
+	// All three should be received by receiver in send order (2, 0, 1)
+	// The server forwards immediately; the frontend handles reordering
+	expectedOrder := []uint64{2, 0, 1}
+	for _, expectedIdx := range expectedOrder {
+		_, data, err := receiverConn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := transfer.EncodeChunk(expectedIdx, testData)
+		if len(data) != len(expected) {
+			t.Fatalf("chunk %d length mismatch: got %d, expected %d", expectedIdx, len(data), len(expected))
+		}
+		for j := range data {
+			if data[j] != expected[j] {
+				t.Fatalf("chunk %d byte %d mismatch: got %d, expected %d", expectedIdx, j, data[j], expected[j])
+			}
+		}
+	}
 }

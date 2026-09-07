@@ -66,6 +66,7 @@ type Manager struct {
 	failed             atomic.Uint64
 	bytesRelayed       atomic.Uint64
 	queueSaturated     atomic.Uint64
+	redisStore         *RedisStore
 }
 
 type Metrics struct {
@@ -85,8 +86,12 @@ type Limits struct {
 	MaxChunkSize int   `json:"maxChunkSize"`
 }
 
-func NewManager(ttl time.Duration, maxFileSize int64, maxChunkSize int) *Manager {
-	manager := &Manager{ttl: ttl, maxFileSize: maxFileSize, maxChunkSize: maxChunkSize, maxActiveTransfers: 1000, maxConnections: 2000}
+func NewManager(ttl time.Duration, maxFileSize int64, maxChunkSize int, redisStore ...*RedisStore) *Manager {
+	var rs *RedisStore
+	if len(redisStore) > 0 {
+		rs = redisStore[0]
+	}
+	manager := &Manager{ttl: ttl, maxFileSize: maxFileSize, maxChunkSize: maxChunkSize, maxActiveTransfers: 1000, maxConnections: 2000, redisStore: rs}
 	for index := range manager.shards {
 		manager.shards[index].sessions = make(map[string]*Session)
 	}
@@ -124,17 +129,78 @@ func (manager *Manager) CreateWithTokens(metadata Metadata) (*Session, TokenPair
 }
 
 func (manager *Manager) create(metadata Metadata, withTokens bool) (*Session, TokenPair, error) {
-	if strings.TrimSpace(metadata.FileName) == "" || len(metadata.FileName) > 255 || strings.ContainsAny(metadata.FileName, "\\/\x00\r\n") {
-		return nil, TokenPair{}, ErrInvalidFileName
+	// Support both single-file (legacy) and multi-file modes
+	isMultiFile := len(metadata.Files) > 0
+	
+	if isMultiFile {
+		// Multi-file validation
+		if metadata.TotalSize <= 0 || metadata.TotalSize > manager.maxFileSize {
+			return nil, TokenPair{}, ErrInvalidFileSize
+		}
+		for _, f := range metadata.Files {
+			if strings.TrimSpace(f.Name) == "" || len(f.Name) > 255 || strings.ContainsAny(f.Name, "\\/\x00\r\n") {
+				return nil, TokenPair{}, ErrInvalidFileName
+			}
+			if f.Size <= 0 {
+				return nil, TokenPair{}, ErrInvalidFileSize
+			}
+		}
+	} else {
+		// Legacy single-file validation
+		if strings.TrimSpace(metadata.FileName) == "" || len(metadata.FileName) > 255 || strings.ContainsAny(metadata.FileName, "\\/\x00\r\n") {
+			return nil, TokenPair{}, ErrInvalidFileName
+		}
+		if len(metadata.MimeType) > 128 || strings.ContainsAny(metadata.MimeType, "\r\n") {
+			return nil, TokenPair{}, ErrInvalidMIME
+		}
 	}
-	if len(metadata.MimeType) > 128 || strings.ContainsAny(metadata.MimeType, "\r\n") {
-		return nil, TokenPair{}, ErrInvalidMIME
+	
+	// Validate encryption metadata
+	if metadata.Encryption != nil {
+		if metadata.Encryption.Scheme != "aes-gcm-pbkdf2" {
+			return nil, TokenPair{}, ErrInvalidSHA256
+		}
+		if metadata.Encryption.Iterations != 250000 {
+			return nil, TokenPair{}, ErrInvalidSHA256
+		}
+		// When encryption is used, sha256Ciphertext is required, sha256 (plaintext) is forbidden
+		if isMultiFile {
+			if metadata.ManifestSHA256Cipher == "" || len(metadata.ManifestSHA256Cipher) != 64 || strings.Trim(metadata.ManifestSHA256Cipher, "0123456789abcdefABCDEF") != "" {
+				return nil, TokenPair{}, ErrInvalidSHA256
+			}
+			if metadata.ManifestSHA256 != "" {
+				return nil, TokenPair{}, ErrInvalidSHA256
+			}
+		} else {
+			if metadata.SHA256Ciphertext == "" || len(metadata.SHA256Ciphertext) != 64 || strings.Trim(metadata.SHA256Ciphertext, "0123456789abcdefABCDEF") != "" {
+				return nil, TokenPair{}, ErrInvalidSHA256
+			}
+			if metadata.SHA256 != "" {
+				return nil, TokenPair{}, ErrInvalidSHA256
+			}
+		}
+	} else {
+		// No encryption: sha256 is optional but if present must be valid
+		if isMultiFile {
+			if metadata.ManifestSHA256 != "" && (len(metadata.ManifestSHA256) != 64 || strings.Trim(metadata.ManifestSHA256, "0123456789abcdefABCDEF") != "") {
+				return nil, TokenPair{}, ErrInvalidSHA256
+			}
+		} else {
+			if metadata.SHA256 != "" && (len(metadata.SHA256) != 64 || strings.Trim(metadata.SHA256, "0123456789abcdefABCDEF") != "") {
+				return nil, TokenPair{}, ErrInvalidSHA256
+			}
+		}
 	}
-	if metadata.SHA256 != "" && (len(metadata.SHA256) != 64 || strings.Trim(metadata.SHA256, "0123456789abcdefABCDEF") != "") {
-		return nil, TokenPair{}, ErrInvalidSHA256
-	}
-	if metadata.FileSize <= 0 || metadata.FileSize > manager.maxFileSize {
-		return nil, TokenPair{}, ErrInvalidFileSize
+	
+	// Validate file size
+	if isMultiFile {
+		if metadata.TotalSize <= 0 || metadata.TotalSize > manager.maxFileSize {
+			return nil, TokenPair{}, ErrInvalidFileSize
+		}
+	} else {
+		if metadata.FileSize <= 0 || metadata.FileSize > manager.maxFileSize {
+			return nil, TokenPair{}, ErrInvalidFileSize
+		}
 	}
 	if metadata.ChunkSize <= 0 || metadata.ChunkSize > manager.maxChunkSize {
 		metadata.ChunkSize = manager.maxChunkSize
@@ -171,11 +237,20 @@ func (manager *Manager) create(metadata Metadata, withTokens bool) (*Session, To
 		session.SenderTokenHash = hashToken(pair.SenderToken)
 		session.ReceiverTokenHash = hashToken(pair.ReceiverToken)
 	}
-	shard := &manager.shards[manager.shardFor(id)]
+shard := &manager.shards[manager.shardFor(id)]
 	shard.mu.Lock()
 	shard.sessions[id] = session
-	shard.mu.Unlock()
+shard.mu.Unlock()
 	manager.created.Add(1)
+
+	// Persist to Redis if configured
+	if manager.redisStore != nil {
+		go func() {
+			if err := manager.redisStore.SaveSession(id, string(WaitingForReceiver), string(TransportMode(metadata.Transport)), time.Now().Unix(), time.Now().Add(manager.ttl).Unix()); err != nil {
+				manager.redisStore.logger.Error("Failed to save session to Redis", "error", err, "id", id)
+			}
+		}()
+	}
 	return session, pair, nil
 }
 

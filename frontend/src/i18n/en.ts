@@ -91,6 +91,15 @@ const en: Record<string, string> = {
   'sender.yourLink': 'YOUR LINK',
   'action.pause': 'Pause',
   'action.cancel': 'Cancel',
+  'password.enable': '🔒 Encrypt with password',
+  'password.label': 'Password',
+  'password.placeholder': 'Enter password (min 8 chars)',
+  'password.show': 'Show',
+  'password.hide': 'Hide',
+  'password.hint': 'AES-256-GCM + PBKDF2(250k). Password never leaves this device. Receiver must enter same password to download.',
+  'password.tooShort': 'Password must be at least 8 characters.',
+  'password.enter': 'Enter password to decrypt',
+  'password.wrong': 'Incorrect password. Please try again.',
 };
 
 export default en;
