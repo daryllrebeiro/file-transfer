@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"file-transfer/backend/internal/config"
 	"file-transfer/backend/internal/transfer"
 	"file-transfer/backend/internal/turn"
 )
@@ -24,6 +25,7 @@ type Server struct {
 	MetricsFormat string
 	TrustProxy    bool
 	TurnHandler   *turn.TurnHandler
+	Settings      config.Config
 }
 type CreationLimiter struct {
 	mu      sync.Mutex
@@ -73,7 +75,7 @@ func (limiter *CreationLimiter) Check(key string, now time.Time) RateLimitResult
 }
 func (server *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc("/healthz", server.healthCheck)
 	mux.HandleFunc("/metrics", server.metrics)
 	mux.HandleFunc("/api/transfers", server.create)
 	mux.HandleFunc("/api/limits", server.limits)
@@ -107,6 +109,48 @@ func (server *Server) metrics(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, metrics)
+}
+
+func (server *Server) healthCheck(w http.ResponseWriter, request *http.Request) {
+	type healthCheckItem struct {
+		Name    string
+		Healthy bool
+		Details string
+	}
+	checks := []healthCheckItem{
+		{"Configuration", true, "loaded"},
+	}
+
+	// Check Redis if enabled
+	if server.Settings.RedisEnabled {
+		checks = append(checks, healthCheckItem{"Redis", true, "enabled via configuration"})
+	}
+
+	// Check manager stats
+	metrics := server.Manager.Metrics()
+	checks = append(checks,
+		healthCheckItem{"active_transfers", metrics.ActiveTransfers < server.Settings.MaxActiveTransfers, fmt.Sprintf("count=%d limit=%d", metrics.ActiveTransfers, server.Settings.MaxActiveTransfers)},
+		healthCheckItem{"active_connections", metrics.ActiveConnections < server.Settings.MaxConnections, fmt.Sprintf("count=%d limit=%d", metrics.ActiveConnections, server.Settings.MaxConnections)},
+	)
+
+	allHealthy := true
+	for _, c := range checks {
+		if !c.Healthy {
+			allHealthy = false
+		}
+	}
+
+	status := http.StatusOK
+	if !allHealthy {
+		status = http.StatusServiceUnavailable
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"healthy": allHealthy,
+		"checks":  checks,
+	})
 }
 func (server *Server) create(w http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
